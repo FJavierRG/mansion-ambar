@@ -1,0 +1,18 @@
+{
+  "objects": [
+    {
+      "type": "sofa",
+      "x": 28,
+      "y": 20,
+      "category": "decoration",
+      "metadata": {}
+    },
+    {
+      "type": "mesa",
+      "x": 28,
+      "y": 22,
+      "category": "decoration",
+      "metadata": {}
+    }
+  ]
+}

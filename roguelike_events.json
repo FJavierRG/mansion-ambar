@@ -1,0 +1,16 @@
+{
+  "triggered_events": [
+    "stranger_lobby_weapons_unlocked",
+    "stranger_lobby_appears",
+    "stranger_floor5_met"
+  ],
+  "events_status": {
+    "stranger_floor5_met": "triggered",
+    "stranger_lobby_appears": "triggered",
+    "stranger_lobby_weapons_unlocked": "triggered",
+    "stranger_lobby_potions_unlocked": "locked",
+    "stranger_help_accepted": "available",
+    "granddaughter_spawn_enabled": "available",
+    "granddaughter_found": "available"
+  }
+}
