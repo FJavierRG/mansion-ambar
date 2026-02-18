@@ -152,6 +152,114 @@ class Item:
         return f"Item({self.name} at ({self.x}, {self.y}))"
 
 
+# ============================================================================
+# REGISTRO / FACTORÍA DE ITEMS POR ID
+# ============================================================================
+
+def get_all_item_ids() -> List[str]:
+    """
+    Retorna todos los IDs de items registrados en el juego.
+    
+    Útil para autocompletado, validaciones y listados.
+    
+    Returns:
+        Lista de todos los item_id válidos
+    """
+    ids: List[str] = []
+    ids.extend(POTION_DATA.keys())
+    ids.extend(WEAPON_DATA.keys())
+    ids.extend(ARMOR_DATA.keys())
+    ids.append("gold")
+    ids.append("amulet")
+    ids.append("heart_key")
+    return ids
+
+
+def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item]:
+    """
+    Crea cualquier item del juego dado su ID.
+    
+    Esta es la factoría central. Todos los items deben crearse a través
+    de esta función para garantizar una única fuente de verdad (config.py).
+    
+    IDs válidos:
+        Pociones : "health_potion", "greater_health_potion", "strength_potion", "poison_potion"
+        Armas    : "dagger", "short_sword", "long_sword", "axe", "great_sword"
+        Armaduras: "leather_armor", "chain_mail", "plate_armor", "dragon_armor"
+        Especiales: "gold", "amulet"
+    
+    Args:
+        item_id: Identificador único del item (clave en POTION_DATA, WEAPON_DATA, etc.)
+        x: Posición X
+        y: Posición Y
+        **kwargs: Parámetros extra según tipo:
+            - gold: siempre vale 1
+    
+    Returns:
+        Instancia del item, o None si el item_id no existe
+    """
+    from .potion import Potion
+    from .weapon import Weapon
+    from .armor import Armor
+    from .special import Gold, Amulet
+    
+    # --- Pociones ---
+    if item_id in POTION_DATA:
+        data = POTION_DATA[item_id]
+        return Potion(
+            x=x, y=y,
+            potion_type=item_id,
+            name=data["name"],
+            effect=data["effect"],
+            value=data["value"],
+            duration=data.get("duration", 0)
+        )
+    
+    # --- Armas ---
+    if item_id in WEAPON_DATA:
+        data = WEAPON_DATA[item_id]
+        return Weapon(
+            x=x, y=y,
+            weapon_type=item_id,
+            name=data["name"],
+            attack_bonus=data["attack_bonus"]
+        )
+    
+    # --- Armaduras ---
+    if item_id in ARMOR_DATA:
+        data = ARMOR_DATA[item_id]
+        return Armor(
+            x=x, y=y,
+            armor_type=item_id,
+            name=data["name"],
+            defense_bonus=data["defense_bonus"]
+        )
+    
+    # --- Oro ---
+    if item_id == "gold":
+        return Gold(x, y, 1)
+    
+    # --- Amuleto de Yendor ---
+    if item_id == "amulet":
+        return Amulet(x, y)
+    
+    # --- Llave con forma de corazón (item clave de misión) ---
+    if item_id == "heart_key":
+        return Item(
+            x=x, y=y,
+            char=SYMBOLS["key"],
+            name="Llave con forma de corazón",
+            color="amulet",
+            item_type="key_item",
+            identified=True,
+            usable=False,
+            persistent=True,
+        )
+    
+    # ID no reconocido
+    return None
+
+
 def create_item_for_floor(floor: int, x: int, y: int, allowed_types: Optional[List[str]] = None) -> Item:
     """
     Crea un item aleatorio apropiado para el piso actual.
@@ -211,8 +319,7 @@ def create_item_for_floor(floor: int, x: int, y: int, allowed_types: Optional[Li
     if "gold" in allowed_types:
         current += weights["gold"]
         if roll < current:
-            amount = random.randint(5, 15) * floor
-            return Gold(x, y, amount)
+            return create_item("gold", x, y)
     
     if "potion" in allowed_types:
         current += weights["potion"]
@@ -229,34 +336,21 @@ def create_item_for_floor(floor: int, x: int, y: int, allowed_types: Optional[Li
         return _create_random_armor(floor, x, y)
     
     # Fallback: oro si nada más está disponible
-    amount = random.randint(5, 15) * floor
-    return Gold(x, y, amount)
+    return create_item("gold", x, y)
 
 
 def _create_random_potion(x: int, y: int) -> Item:
-    """Crea una poción aleatoria."""
-    from .potion import Potion
-    
+    """Crea una poción aleatoria basada en rareza."""
     # Seleccionar tipo basado en rareza
     potions = list(POTION_DATA.items())
     weights = [data["rarity"] for _, data in potions]
-    potion_key, potion_data = random.choices(potions, weights=weights)[0]
+    potion_key, _ = random.choices(potions, weights=weights)[0]
     
-    return Potion(
-        x=x,
-        y=y,
-        potion_type=potion_key,
-        name=potion_data["name"],
-        effect=potion_data["effect"],
-        value=potion_data["value"],
-        duration=potion_data.get("duration", 0)
-    )
+    return create_item(potion_key, x, y)
 
 
 def _create_random_weapon(floor: int, x: int, y: int) -> Item:
     """Crea un arma aleatoria apropiada para el piso."""
-    from .weapon import Weapon
-    
     # Filtrar armas por nivel mínimo
     valid_weapons = [
         (key, data) for key, data in WEAPON_DATA.items()
@@ -268,21 +362,13 @@ def _create_random_weapon(floor: int, x: int, y: int) -> Item:
     
     # Seleccionar basado en rareza
     weights = [data["rarity"] for _, data in valid_weapons]
-    weapon_key, weapon_data = random.choices(valid_weapons, weights=weights)[0]
+    weapon_key, _ = random.choices(valid_weapons, weights=weights)[0]
     
-    return Weapon(
-        x=x,
-        y=y,
-        weapon_type=weapon_key,
-        name=weapon_data["name"],
-        attack_bonus=weapon_data["attack_bonus"]
-    )
+    return create_item(weapon_key, x, y)
 
 
 def _create_random_armor(floor: int, x: int, y: int) -> Item:
     """Crea una armadura aleatoria apropiada para el piso."""
-    from .armor import Armor
-    
     # Filtrar armaduras por nivel mínimo
     valid_armors = [
         (key, data) for key, data in ARMOR_DATA.items()
@@ -294,12 +380,6 @@ def _create_random_armor(floor: int, x: int, y: int) -> Item:
     
     # Seleccionar basado en rareza
     weights = [data["rarity"] for _, data in valid_armors]
-    armor_key, armor_data = random.choices(valid_armors, weights=weights)[0]
+    armor_key, _ = random.choices(valid_armors, weights=weights)[0]
     
-    return Armor(
-        x=x,
-        y=y,
-        armor_type=armor_key,
-        name=armor_data["name"],
-        defense_bonus=armor_data["defense_bonus"]
-    )
+    return create_item(armor_key, x, y)

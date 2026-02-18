@@ -142,11 +142,6 @@ class Combat:
             # Procesar muerte del monstruo
             death_messages = victim.die()
             messages.extend(death_messages)
-            
-            # Drop de oro
-            gold_drop = random.randint(1, 5) * (victim.dungeon.floor if victim.dungeon else 1)
-            killer.gold += gold_drop
-            messages.append(f"Encuentras {gold_drop} monedas de oro.")
         
         elif isinstance(victim, Player):
             messages.append("¡Has muerto!")

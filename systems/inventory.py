@@ -44,7 +44,15 @@ class Inventory:
         if item.item_type == "gold":
             player.gold += item.value
             dungeon.remove_item(item)
-            messages.append(f"Recoges {item.value} monedas de oro.")
+            messages.append("Recoges una moneda de oro.")
+            
+            # Disparar evento de primera moneda recogida (desbloquea NPCs)
+            from ..systems.events import event_manager
+            if not event_manager.is_event_triggered("first_gold_pickup"):
+                event_manager.trigger_event(
+                    "first_gold_pickup", player, dungeon, skip_conditions=True
+                )
+            
             return messages
         
         # Verificar si es el amuleto

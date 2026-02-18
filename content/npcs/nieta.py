@@ -163,7 +163,7 @@ def register_npc_states(manager) -> None:
     Args:
         manager: Instancia de NPCStateManager
     """
-    from roguelike.systems.npc_states import NPCStateConfig
+    from roguelike.systems.npc_states import NPCStateConfig, StateTransition
     from roguelike.systems.events import event_manager
     import random
     
@@ -191,6 +191,16 @@ def register_npc_states(manager) -> None:
     # Estado "obligada" - Lobby, después de obligarla a subir
     # NOTA: Este estado se alcanza programáticamente desde el diálogo de la nieta.
     # Necesita spawn_condition para evitar ser seleccionado como estado inicial.
+    def check_nieta_desaparecen_transition(player, zone):
+        """
+        Verifica si la nieta debe desaparecer junto con el Stranger.
+        Misma condición que el Stranger: 3 runs tras completar mision_capturar_nieta.
+        """
+        completed_at = event_manager.get_data("mision_capturar_nieta_completed_at_run", -1)
+        if completed_at < 0:
+            return False
+        return event_manager.run_count >= completed_at + 3
+    
     manager.register_npc_state("nieta", NPCStateConfig(
         state_id="obligada",
         zone_type="lobby",
@@ -198,6 +208,20 @@ def register_npc_states(manager) -> None:
         dialog_tree_func=create_nieta_obligada_dialog,
         completed_dialog_func=create_nieta_obligada_completed,
         spawn_condition=lambda floor, evt_mgr: evt_mgr.is_event_triggered("nieta_obligada"),
+        transitions=[
+            StateTransition(
+                target_state="desaparecida",
+                condition=check_nieta_desaparecen_transition,
+                description="Desaparece junto con el Stranger tras 3 runs"
+            )
+        ]
+    ))
+    
+    # Estado "desaparecida" - Nieta desaparece junto con el Stranger
+    # zone_type=None hace que no spawnee en ninguna zona.
+    manager.register_npc_state("nieta", NPCStateConfig(
+        state_id="desaparecida",
+        zone_type=None,  # No aparece en ninguna zona
     ))
     
     # Estado "ayudando" - Dungeon Piso 1, esperando

@@ -40,28 +40,47 @@ def create_merchant_shop_dialog() -> DialogTree:
     """
     Crea el diálogo del Comerciante.
     
-    Ofrece la opción de abrir la tienda o despedirse.
+    Si la tienda tiene items, ofrece la opción de abrir la tienda.
+    Si está vacía, muestra un diálogo alternativo lamentando la falta de stock.
     
     Returns:
         DialogTree con el diálogo
     """
+    from roguelike.systems.shop import get_merchant_shop
+    
     tree = DialogTree(start_node="welcome")
+    shop = get_merchant_shop()
     
-    welcome_node = DialogNode(
-        node_id="welcome",
-        speaker="Comerciante",
-        text="¡Bienvenido, viajero! Tengo mercancía que podría interesarte.",
-        options=[
-            DialogOption(
-                "Ver mercancía",
-                next_node=None,
-                action=_open_shop_action
-            ),
-            DialogOption("No, gracias", next_node=None),
-        ]
-    )
+    if shop.get_item_count() == 0:
+        # Sin stock — diálogo alternativo
+        welcome_node = DialogNode(
+            node_id="welcome",
+            speaker="Comerciante",
+            text="¿Escucho a un cliente? Discúlpame, no tengo ojos.\n"
+                 "La tienda anda un poco escasa de suministros..."
+                 "---Estoy buscando a alguien que me ayude a reponerlos, pero es complicado ",
+            options=[
+                DialogOption("Entiendo...", next_node=None),
+            ]
+        )
+    else:
+        # Con stock — diálogo normal
+        welcome_node = DialogNode(
+            node_id="welcome",
+            speaker="Comerciante",
+            text="Escucho pasos. Bienvenido cliente. "
+                 "Perdona que no te haya visto, ya sabes no tengo ojos. ¿Te interesa algo?",
+            options=[
+                DialogOption(
+                    "Ver mercancía",
+                    next_node=None,
+                    action=_open_shop_action
+                ),
+                DialogOption("No, gracias", next_node=None),
+            ]
+        )
+    
     tree.add_node(welcome_node)
-    
     return tree
 
 

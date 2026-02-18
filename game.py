@@ -62,7 +62,7 @@ class Game:
         self.visible_tiles: Set[Tuple[int, int]] = set()
         
         # Modos de inventario
-        self.inventory_mode = "normal"  # normal, use, equip, drop
+        self.inventory_mode = "normal"  # normal, drop
         self.inventory_cursor = 0  # Índice del item seleccionado
         self.inventory_scroll = 0  # Offset de scroll
         self.inventory_max_visible = 12  # Items visibles a la vez
@@ -92,6 +92,10 @@ class Game:
         # Tienda
         self.current_shop: Optional[Shop] = None
         self.shop_cursor: int = 0
+        
+        # Donación (selector numérico del Comerciante Errante)
+        self.donation_amount: int = 0       # Cantidad seleccionada (0-99)
+        self.donation_digit: int = 0        # 0 = unidades, 1 = decenas
         
         # Menú de pausa (cursor de navegación)
         self.pause_menu_cursor: int = 0  # 0=Continuar, 1=Opciones, 2=Salir
@@ -206,7 +210,9 @@ class Game:
                 shop=self.current_shop,
                 shop_cursor=self.shop_cursor,
                 pause_cursor=self.pause_menu_cursor,
-                options_cursor=self.options_menu_cursor
+                options_cursor=self.options_menu_cursor,
+                donation_amount=self.donation_amount,
+                donation_digit=self.donation_digit,
             )
         
         self.renderer.tick(FPS)
@@ -236,6 +242,8 @@ class Game:
             self._handle_save_menu_input(key)
         elif self.state == GameState.SHOP:
             self._handle_shop_input(key)
+        elif self.state == GameState.DONATION:
+            self._handle_donation_input(key)
         elif self.state == GameState.OPTIONS:
             self._handle_options_input(key)
     
@@ -344,45 +352,34 @@ class Game:
             self.inventory_cursor = min(self.inventory_scroll, inventory_size - 1)
             return
         
-        # Cambiar modo de inventario (sin seleccionar aún)
-        if key == pygame.K_u:
-            self.inventory_mode = "use"
-            self.message_log.add("USAR: Navega con ↑↓ y confirma con ENTER.")
-            return
-        
-        if key == pygame.K_w:
-            self.inventory_mode = "equip"
-            self.message_log.add("EQUIPAR: Navega con ↑↓ y confirma con ENTER.")
-            return
-        
+        # Modo soltar (D)
         if key == pygame.K_d:
-            self.inventory_mode = "drop"
-            self.message_log.add("SOLTAR: Navega con ↑↓ y confirma con ENTER.")
+            if self.inventory_mode == "drop":
+                # Ya en modo soltar: desactivar
+                self.inventory_mode = "normal"
+            else:
+                self.inventory_mode = "drop"
+                self.message_log.add("SOLTAR: Navega con ↑↓ y confirma con ENTER.")
             return
         
-        # Confirmar selección con ENTER o G
-        if key == pygame.K_RETURN or key == pygame.K_KP_ENTER or key == pygame.K_g:
+        # Confirmar selección con ENTER
+        if key == pygame.K_RETURN or key == pygame.K_KP_ENTER:
             if inventory_size == 0:
                 self.message_log.add("El inventario está vacío.")
                 return
             
             self._execute_inventory_action(self.inventory_cursor)
             return
-        
-        # También permitir selección directa con letras (a-z)
-        if pygame.K_a <= key <= pygame.K_z:
-            index = key - pygame.K_a
-            if index < inventory_size:
-                self.inventory_cursor = index
-                # Ajustar scroll para mostrar el item seleccionado
-                if index < self.inventory_scroll:
-                    self.inventory_scroll = index
-                elif index >= self.inventory_scroll + self.inventory_max_visible:
-                    self.inventory_scroll = index - self.inventory_max_visible + 1
-                self._execute_inventory_action(index)
     
     def _execute_inventory_action(self, index: int) -> None:
-        """Ejecuta la acción del inventario sobre el item seleccionado."""
+        """Ejecuta la acción del inventario sobre el item seleccionado.
+        
+        En modo 'drop' suelta el item. En modo 'normal' activa
+        inteligentemente según el tipo:
+          - Item equipado → lo desequipa
+          - Item equipable (arma/armadura) → lo equipa
+          - Item usable (pociones) → lo usa
+        """
         item = self.player.get_inventory_item(index)
         
         if not item:
@@ -393,28 +390,44 @@ class Game:
         close_inventory = False  # Solo cerrar en ciertos casos
         consume_turn = False  # Solo consumir turno en ciertos casos
         
-        if self.inventory_mode == "use":
-            messages = Inventory.use_item(self.player, index)
-            # Usar items consume turno y cierra inventario
-            close_inventory = True
-            consume_turn = True
-            
-        elif self.inventory_mode == "equip":
-            messages = Inventory.equip_item(self.player, index)
-            # Equipar NO cierra inventario, pero tampoco consume turno
-            close_inventory = False
-            consume_turn = False
-            
-        elif self.inventory_mode == "drop":
+        if self.inventory_mode == "drop":
             messages = Inventory.drop_item(self.player, self.dungeon, index)
             # Soltar NO cierra inventario
             close_inventory = False
             consume_turn = False
             
-        else:  # normal - usar por defecto
-            messages = Inventory.use_item(self.player, index)
-            close_inventory = True
-            consume_turn = True
+        else:
+            # Activación inteligente: detectar qué hacer con el item
+            is_equipped = any(
+                equipped is item
+                for equipped in self.player.equipped.values()
+                if equipped is not None
+            )
+            
+            if is_equipped:
+                # Ya equipado → desequipar
+                slot = item.slot if hasattr(item, 'slot') else None
+                if slot:
+                    messages = Inventory.unequip_item(self.player, slot)
+                else:
+                    messages = ["No puedes desequipar ese item."]
+                close_inventory = False
+                consume_turn = False
+                
+            elif hasattr(item, 'slot') and item.slot:
+                # Equipable → equipar
+                messages = Inventory.equip_item(self.player, index)
+                close_inventory = False
+                consume_turn = False
+                
+            elif hasattr(item, 'usable') and item.usable:
+                # Usable (pociones, etc.) → usar
+                messages = Inventory.use_item(self.player, index)
+                close_inventory = True
+                consume_turn = True
+                
+            else:
+                messages = [f"No puedes activar {item.name}."]
         
         self.message_log.add_multiple(messages)
         self.inventory_mode = "normal"
@@ -608,6 +621,10 @@ class Game:
                         # El diálogo del comerciante señaló abrir la tienda
                         self.player._pending_shop = False
                         self._open_shop()
+                    elif getattr(self.player, '_pending_donation', False):
+                        # El diálogo del errante señaló abrir el selector de donación
+                        self.player._pending_donation = False
+                        self._open_donation()
                     else:
                         # No hay más mensajes, volver al juego inmediatamente
                         print("[DEBUG] No hay mensajes, cambiando a estado PLAYING")
@@ -704,6 +721,65 @@ class Game:
         elif key == pygame.K_ESCAPE:
             self.current_shop = None
             self.shop_cursor = 0
+            self.state = GameState.PLAYING
+    
+    def _open_donation(self) -> None:
+        """Abre el selector de donación de oro."""
+        self.donation_amount = 0
+        self.donation_digit = 0  # Empezar en unidades
+        self.state = GameState.DONATION
+        music_manager.play_sound("UI-select.mp3", volume=0.3)
+    
+    def _handle_donation_input(self, key: int) -> None:
+        """
+        Maneja la entrada durante el selector de donación.
+        
+        Controles:
+            ←/→: Cambiar entre dígito de decenas y unidades
+            ↑/↓: Incrementar/decrementar el dígito seleccionado
+            ENTER: Confirmar donación
+            ESC: Cancelar
+        """
+        max_donation = min(99, self.player.gold)
+        
+        if key == pygame.K_LEFT:
+            self.donation_digit = 1  # Decenas
+            music_manager.play_sound("UI-move.mp3", volume=0.2)
+        
+        elif key == pygame.K_RIGHT:
+            self.donation_digit = 0  # Unidades
+            music_manager.play_sound("UI-move.mp3", volume=0.2)
+        
+        elif key == pygame.K_UP:
+            step = 10 if self.donation_digit == 1 else 1
+            self.donation_amount = min(max_donation, self.donation_amount + step)
+            music_manager.play_sound("UI-move.mp3", volume=0.2)
+        
+        elif key == pygame.K_DOWN:
+            step = 10 if self.donation_digit == 1 else 1
+            self.donation_amount = max(0, self.donation_amount - step)
+            music_manager.play_sound("UI-move.mp3", volume=0.2)
+        
+        elif key == pygame.K_RETURN or key == pygame.K_KP_ENTER:
+            if self.donation_amount > 0:
+                # Ejecutar la donación
+                from .systems.events import event_manager
+                from .systems.shop import refresh_merchant_shop
+                
+                self.player.gold -= self.donation_amount
+                current_total = event_manager.get_data("merchant_donated_total", 0)
+                event_manager.set_data("merchant_donated_total", current_total + self.donation_amount)
+                refresh_merchant_shop()
+                
+                self.message_log.add(
+                    f"Has donado {self.donation_amount} oro al mercader.",
+                    "message_important"
+                )
+                music_manager.play_sound("UI-select.mp3", volume=0.4)
+            
+            self.state = GameState.PLAYING
+        
+        elif key == pygame.K_ESCAPE:
             self.state = GameState.PLAYING
     
     def _handle_console_input(self, key: int) -> None:
@@ -1476,14 +1552,16 @@ class Game:
         
         Preserva el progreso meta (eventos, estados FSM de NPCs).
         Solo resetea la run actual (mazmorras, jugador, inventario no persistente).
-        Los items con persistent=True se transfieren al nuevo jugador.
+        Los items con persistent=True y el oro se transfieren al nuevo jugador.
         Incrementa el contador de runs completadas.
         Guarda automáticamente en el slot actual.
         """
-        # Guardar items persistentes del jugador anterior (items de misión, etc.)
+        # Guardar items persistentes y oro del jugador anterior
         persistent_items = []
+        preserved_gold = 0
         if self.player:
             persistent_items = self.player.get_persistent_items()
+            preserved_gold = self.player.gold
         
         # Incrementar contador de runs completadas
         # Esto permite que las transiciones FSM de NPCs detecten
@@ -1499,8 +1577,9 @@ class Game:
         
         self._start_in_lobby()
         
-        # Transferir items persistentes al nuevo jugador
-        if persistent_items and self.player:
+        # Transferir items persistentes y oro al nuevo jugador
+        if self.player:
+            self.player.gold = preserved_gold
             for item in persistent_items:
                 self.player.add_to_inventory(item)
         

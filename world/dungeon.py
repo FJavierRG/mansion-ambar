@@ -9,8 +9,12 @@ from .tile import Tile, TileType
 from .room import Room
 from ..config import (
     MAP_WIDTH, MAP_HEIGHT, ROOM_MIN_SIZE, ROOM_MAX_SIZE,
-    MAX_ROOMS, MAX_ROOM_MONSTERS, MAX_ROOM_ITEMS, MAX_DUNGEON_LEVEL,
-    SYMBOLS, DOOR_CHANCE
+    MAX_ROOMS, MAX_ROOM_MONSTERS, MAX_DUNGEON_LEVEL,
+    SYMBOLS, DOOR_CHANCE,
+    FLOOR_COMBAT_ITEMS_BASE, FLOOR_COMBAT_ITEMS_VARIANCE,
+    FLOOR_COMBAT_ITEMS_MIN, FLOOR_COMBAT_ITEMS_FLOOR_DIV,
+    FLOOR_GOLD_BASE, FLOOR_GOLD_VARIANCE,
+    FLOOR_GOLD_MIN, FLOOR_GOLD_FLOOR_DIV,
 )
 
 if TYPE_CHECKING:
@@ -266,61 +270,63 @@ class Dungeon:
         return candidates
     
     def _populate(self) -> None:
-        """Puebla la mazmorra con monstruos e items."""
-        from ..entities.monster import Monster, create_monster_for_floor
-        from ..items.item import create_item_for_floor
+        """Puebla la mazmorra con monstruos e items.
         
-        for i, room in enumerate(self.rooms):
-            # No poblar la primera habitación (spawn del jugador)
-            if i == 0:
-                continue
-            
-            # Monstruos
+        Los monstruos se generan por habitación.
+        Los items se generan por planta con dos pools independientes:
+          - Pool de combate: pociones, armas, armaduras
+          - Pool de oro: monedas (solo en Fase 3)
+        Luego se distribuyen aleatoriamente entre las salas elegibles.
+        """
+        from ..entities.monster import Monster, create_monster_for_floor
+        from ..items.item import create_item_for_floor, create_item
+        
+        eligible_rooms = self.rooms[1:]  # Excluir sala de spawn
+        
+        # --- Monstruos (por habitación, sin cambios) ---
+        for room in eligible_rooms:
             num_monsters = random.randint(0, min(MAX_ROOM_MONSTERS, 1 + self.floor // 2))
             for _ in range(num_monsters):
                 x, y = self._get_random_room_position(room)
                 if not self.get_blocking_entity_at(x, y):
                     monster = create_monster_for_floor(self.floor, x, y, self)
                     self.entities.append(monster)
+        
+        # --- Items: sistema per-floor con desbloqueo progresivo ---
+        # Fase 1: Sin items (primera run, va a puños)
+        # Fase 2: Solo armas y armaduras (después de primera charla con Stranger)
+        # Fase 3: Todo + monedas de oro (después de segunda charla)
+        from ..systems.events import event_manager
+        
+        weapons_unlocked = event_manager.is_event_triggered("stranger_lobby_weapons_unlocked")
+        potions_unlocked = event_manager.is_event_triggered("stranger_lobby_potions_unlocked")
+        
+        if weapons_unlocked and eligible_rooms:
+            # Tipos permitidos para el pool de combate
+            combat_types = ["weapon", "armor", "potion"] if potions_unlocked else ["weapon", "armor"]
             
-            # Items - Sistema de desbloqueo progresivo
-            # Fase 1: Sin items (primera run, va a puños)
-            # Fase 2: Solo armas y armaduras (después de primera charla con Stranger en lobby)
-            # Fase 3: Todos los items incluyendo pociones (después de segunda charla)
-            from ..systems.events import event_manager
+            # Pool 1: Items de combate
+            combat_penalty = (self.floor - 1) // FLOOR_COMBAT_ITEMS_FLOOR_DIV
+            num_combat = max(
+                FLOOR_COMBAT_ITEMS_MIN,
+                FLOOR_COMBAT_ITEMS_BASE + random.randint(0, FLOOR_COMBAT_ITEMS_VARIANCE) - combat_penalty
+            )
+            self._distribute_items_in_rooms(
+                eligible_rooms, num_combat,
+                lambda x, y: create_item_for_floor(self.floor, x, y, allowed_types=combat_types)
+            )
             
-            # Verificar qué items están desbloqueados
-            weapons_unlocked = event_manager.is_event_triggered("stranger_lobby_weapons_unlocked")
-            potions_unlocked = event_manager.is_event_triggered("stranger_lobby_potions_unlocked")
-            
-            # Si no hay nada desbloqueado, no spawneear items
-            if not weapons_unlocked:
-                continue  # Saltar el spawneo de items (el jugador va a puños)
-            
-            # Determinar qué tipos de items pueden spawnear
-            if weapons_unlocked and not potions_unlocked:
-                # Fase 2: Solo armas y armaduras (después de primera charla con Stranger)
-                allowed_types = ["weapon", "armor"]
-            elif potions_unlocked:
-                # Fase 3: Todos los items incluyendo pociones (después de segunda charla)
-                allowed_types = ["weapon", "armor", "potion", "gold"]
-            else:
-                # No debería llegar aquí si weapons_unlocked es True
-                allowed_types = []
-            
-            # Probabilidad de que la habitación tenga items (decrece con el piso)
-            # Piso 1: 50% de chance, Piso 10: 14% de chance
-            item_room_chance = 0.50 - (self.floor - 1) * 0.04
-            
-            if random.random() < item_room_chance:
-                # Máximo 1 item por habitación
-                num_items = random.randint(0, MAX_ROOM_ITEMS)
-                
-                for _ in range(num_items):
-                    x, y = self._get_random_room_position(room)
-                    if not self.get_item_at(x, y):
-                        item = create_item_for_floor(self.floor, x, y, allowed_types=allowed_types)
-                        self.items.append(item)
+            # Pool 2: Monedas de oro (solo Fase 3)
+            if potions_unlocked:
+                gold_penalty = (self.floor - 1) // FLOOR_GOLD_FLOOR_DIV
+                num_gold = max(
+                    FLOOR_GOLD_MIN,
+                    FLOOR_GOLD_BASE + random.randint(0, FLOOR_GOLD_VARIANCE) - gold_penalty
+                )
+                self._distribute_items_in_rooms(
+                    eligible_rooms, num_gold,
+                    lambda x, y: create_item("gold", x, y)
+                )
         
         # Spawn del jefe en el último piso
         if self.floor == MAX_DUNGEON_LEVEL and not self.boss_spawned:
@@ -329,11 +335,35 @@ class Dungeon:
         # Spawn automático de NPCs basado en configuración de estados
         self.spawn_npcs_from_states()
     
+    def _distribute_items_in_rooms(
+        self,
+        rooms: List[Room],
+        count: int,
+        item_factory,
+        max_retries: int = 3
+    ) -> None:
+        """Distribuye items aleatoriamente entre las salas.
+        
+        Args:
+            rooms: Salas elegibles
+            count: Número de items a colocar
+            item_factory: Callable(x, y) -> Item
+            max_retries: Reintentos por item si la posición está ocupada
+        """
+        for _ in range(count):
+            room = random.choice(rooms)
+            for _retry in range(max_retries):
+                x, y = self._get_random_room_position(room)
+                if not self.get_item_at(x, y):
+                    item = item_factory(x, y)
+                    if item:
+                        self.items.append(item)
+                    break
+    
     def _spawn_boss(self) -> None:
         """Spawnea el jefe final y el amuleto."""
         from ..entities.monster import Monster
-        from ..items.item import Item
-        from ..items.special import Amulet
+        from ..items.item import create_item
         
         if len(self.rooms) < 2:
             return
@@ -355,7 +385,7 @@ class Dungeon:
         if not self.is_walkable(ax, ay):
             ax, ay = bx - 1, by
         
-        amulet = Amulet(ax, ay)
+        amulet = create_item("amulet", ax, ay)
         self.items.append(amulet)
     
     def spawn_npcs_from_states(self) -> None:

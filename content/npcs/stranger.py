@@ -220,7 +220,8 @@ def create_stranger_waiting_dialog() -> DialogTree:
 
 def create_stranger_mision_capturar_nieta_dialog() -> DialogTree:
     """
-    Crea el diálogo del Stranger cuando la misión cambia a capturar a la nieta.
+    Crea el diálogo del Stranger cuando el jugador obligó a la nieta a subir.
+    Stranger agradece y entrega la Llave con forma de corazón.
     
     Returns:
         DialogTree con el diálogo completo
@@ -230,12 +231,32 @@ def create_stranger_mision_capturar_nieta_dialog() -> DialogTree:
     start_node = DialogNode(
         node_id="start",
         speaker="Stranger",
-        text="[Diálogo del Stranger sobre capturar a la nieta - placeholder]",
+        text="Te agradezco enormemente que hayas encontrado a la niña, preciosa, preciosa niña\nNo te preocupes por su enfado, se le pasará enseguida y podremos marcharnos.---Solo espero que no vuelva a escapárseme una vez bajemos a los túneles...",
         options=[
-            DialogOption("Continuar", next_node=None)
+            DialogOption("Continuar", next_node="reward")
         ]
     )
     tree.add_node(start_node)
+    
+    def on_give_heart_key(player, zone):
+        """Da la Llave con forma de corazón al jugador y guarda el run actual."""
+        from roguelike.items.item import create_item
+        from roguelike.systems.events import event_manager
+        key = create_item("heart_key", x=player.x, y=player.y)
+        if key:
+            player.add_to_inventory(key)
+        # Guardar en qué run se completó para contar 3 runs hasta la desaparición
+        event_manager.set_data("mision_capturar_nieta_completed_at_run", event_manager.run_count)
+    
+    reward_node = DialogNode(
+        node_id="reward",
+        speaker="Stranger",
+        text="Por cierto, antes mientras estaba comprobando que no tuviera ninguna herida he encontrado que llevaba esto.\nPuedes quedártelo como muestra de agradecimiento.",
+        options=[
+            DialogOption("Gracias", next_node=None, action=on_give_heart_key)
+        ]
+    )
+    tree.add_node(reward_node)
     
     return tree
 
@@ -243,7 +264,7 @@ def create_stranger_mision_capturar_nieta_dialog() -> DialogTree:
 def create_stranger_mision_capturar_nieta_completed() -> InteractiveText:
     """Diálogo corto cuando el estado 'mision_capturar_nieta' está completado."""
     return InteractiveText.create_simple_text(
-        "[Diálogo corto del Stranger - mision_capturar_nieta - placeholder]",
+        "Aún sigo pensando cómo podemos salir de aquí...",
         title="Stranger",
         auto_close=False
     )
@@ -267,16 +288,10 @@ def create_stranger_mision_nieta_ayudar_dialog() -> DialogTree:
     def on_give_potion(player, zone):
         """Da una poción de salud al jugador e incrementa el contador."""
         from roguelike.systems.events import event_manager
-        from roguelike.items.potion import Potion
+        from roguelike.items.item import create_item
         
         # Dar poción de salud al jugador
-        potion = Potion(
-            x=player.x, y=player.y,
-            potion_type="health_potion",
-            name="Poción de Salud",
-            effect="heal",
-            value=20
-        )
+        potion = create_item("health_potion", x=player.x, y=player.y)
         added = player.add_to_inventory(potion)
         print(f"[DEBUG] on_give_potion: added={added}, inventario={len(player.inventory)} items, id(player)={id(player)}")
         
@@ -454,13 +469,45 @@ def register_npc_states(manager) -> None:
     # NOTA: Este estado se alcanza programáticamente desde el diálogo de la nieta.
     # No tiene transiciones entrantes en el grafo FSM, así que necesita spawn_condition
     # para evitar ser seleccionado como estado inicial.
+    def check_capturar_nieta_completed(player, zone):
+        """Verifica si el diálogo de capturar nieta fue completado."""
+        return event_manager.is_event_triggered("mision_capturar_nieta_started")
+    
+    def check_desaparecen_transition(player, zone):
+        """
+        Verifica si Stranger y nieta deben desaparecer.
+        
+        Requiere que se hayan completado 3 runs desde que se completó
+        el diálogo de mision_capturar_nieta.
+        """
+        completed_at = event_manager.get_data("mision_capturar_nieta_completed_at_run", -1)
+        if completed_at < 0:
+            return False
+        return event_manager.run_count >= completed_at + 3
+    
     manager.register_npc_state("Stranger", NPCStateConfig(
         state_id="mision_capturar_nieta",
         zone_type="lobby",
         position=(40, 20),
         dialog_tree_func=create_stranger_mision_capturar_nieta_dialog,
         completed_dialog_func=create_stranger_mision_capturar_nieta_completed,
+        completion_condition=check_capturar_nieta_completed,
         spawn_condition=lambda floor, evt_mgr: evt_mgr.is_event_triggered("mision_capturar_nieta_started"),
+        transitions=[
+            StateTransition(
+                target_state="stranger_y_nieta_desaparecen",
+                condition=check_desaparecen_transition,
+                description="Después de 3 runs tras completar mision_capturar_nieta"
+            )
+        ]
+    ))
+    
+    # Estado "stranger_y_nieta_desaparecen" - Ambos NPCs desaparecen
+    # zone_type=None hace que el NPC no spawnee en ninguna zona.
+    # Este es un estado "sumidero": una vez aquí, el Stranger no aparece más.
+    manager.register_npc_state("Stranger", NPCStateConfig(
+        state_id="stranger_y_nieta_desaparecen",
+        zone_type=None,  # No aparece en ninguna zona
     ))
     
     # Estado "mision_nieta_ayudar" - Lobby, el Stranger da pociones al jugador

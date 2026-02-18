@@ -63,13 +63,13 @@ class Gold(Item):
         Args:
             x: Posición X
             y: Posición Y
-            amount: Cantidad de oro
+            amount: Cantidad de oro (siempre 1)
         """
         super().__init__(
             x=x,
             y=y,
             char=SYMBOLS["gold"],
-            name=f"{amount} monedas de oro",
+            name="moneda de oro",
             color="gold",
             item_type="gold",
             identified=True,
@@ -77,11 +77,11 @@ class Gold(Item):
             slot=None
         )
         
-        self.value = amount
+        self.value = 1
     
     def get_description(self) -> str:
         """Retorna la descripción del oro."""
-        return f"{self.value} monedas de oro"
+        return "Una moneda de oro."
     
     def to_dict(self) -> Dict[str, Any]:
         """Serializa el oro."""

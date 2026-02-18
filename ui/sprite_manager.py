@@ -39,6 +39,7 @@ class SpriteManager:
         "nieta": "nieta.png",  # Nieta del Stranger
         "alquimista": "alchemist.png",  # Alquimista
         "comerciante": "merchant.png",  # Comerciante (32x32, no escalar)
+        "comerciante errante": "merchant_wanderer.png",  # Comerciante Errante (lobby)
     }
     
     # Sprites que NO deben escalarse a TILE_SIZE (mantienen su tamaño original)

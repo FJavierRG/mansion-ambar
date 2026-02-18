@@ -41,8 +41,21 @@ ROOM_MIN_SIZE: int = 6
 ROOM_MAX_SIZE: int = 12
 MAX_ROOMS: int = 15
 MAX_ROOM_MONSTERS: int = 4
-MAX_ROOM_ITEMS: int = 1  # Máximo 1 item por habitación para menor abundancia
 MAX_DUNGEON_LEVEL: int = 10
+
+# --- Spawn de items por planta (dos pools independientes) ---
+# Pool 1: Items de combate (pociones, armas, armaduras)
+#   total = max(MIN, BASE + randint(0, VARIANCE) - (floor-1)//FLOOR_DIV)
+FLOOR_COMBAT_ITEMS_BASE: int = 2
+FLOOR_COMBAT_ITEMS_VARIANCE: int = 2     # +randint(0, N) → rango 2-4
+FLOOR_COMBAT_ITEMS_MIN: int = 1
+FLOOR_COMBAT_ITEMS_FLOOR_DIV: int = 3    # penalización cada N pisos
+
+# Pool 2: Monedas de oro (independiente, solo activo en Fase 3)
+FLOOR_GOLD_BASE: int = 2
+FLOOR_GOLD_VARIANCE: int = 2             # +randint(0, N) → rango 2-4
+FLOOR_GOLD_MIN: int = 1
+FLOOR_GOLD_FLOOR_DIV: int = 4            # penalización más suave que combate
 
 # Probabilidad de que una habitación tenga puertas en todas sus entradas
 DOOR_CHANCE: float = 0.3
@@ -93,6 +106,7 @@ SYMBOLS: Dict[str, str] = {
     "gold": "$",
     "amulet": '"',
     "ring": "=",
+    "key": "♥",
 }
 
 # ============================================================================
@@ -453,4 +467,5 @@ class GameState:
     CONSOLE = "console"  # Consola de comandos de desarrollo
     SAVE_MENU = "save_menu"  # Menú de selección de guardados
     SHOP = "shop"  # Tienda del comerciante
+    DONATION = "donation"  # Selector de donación de oro
     OPTIONS = "options"  # Menú de opciones (centralizado)

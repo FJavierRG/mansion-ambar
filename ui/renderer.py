@@ -90,7 +90,9 @@ class Renderer:
         shop: Optional[Any] = None,
         shop_cursor: int = 0,
         pause_cursor: int = 0,
-        options_cursor: int = 0
+        options_cursor: int = 0,
+        donation_amount: int = 0,
+        donation_digit: int = 0,
     ) -> None:
         """
         Renderiza todo el juego.
@@ -157,6 +159,8 @@ class Renderer:
             self._render_save_menu(save_menu_selected, save_menu_mode)
         elif game_state == GameState.SHOP:
             self._render_shop(player, shop, shop_cursor)
+        elif game_state == GameState.DONATION:
+            self._render_donation(player, donation_amount, donation_digit)
         
         # Actualizar pantalla
         pygame.display.flip()
@@ -339,8 +343,6 @@ class Renderer:
         # Título con modo actual
         mode_text = {
             "normal": "",
-            "use": " [USAR]",
-            "equip": " [EQUIPAR]",
             "drop": " [SOLTAR]"
         }
         title = f"=== INVENTARIO{mode_text.get(mode, '')} ==="
@@ -351,21 +353,17 @@ class Renderer:
             (inv_x + (inv_width - title_surface.get_width()) // 2, inv_y + 10)
         )
         
-        # Instrucciones en dos líneas para mejor legibilidad
-        line1 = "↑↓ Navegar    ENTER Confirmar    ESC Cerrar"
-        line2 = "[U] Usar    [W] Equipar    [D] Soltar"
+        # Instrucciones simplificadas
+        line1 = "↑↓ Navegar    ENTER Activar    [D] Soltar    ESC Cerrar"
         
         line1_surface = self.font.render(line1, True, COLORS["gray"])
         self.screen.blit(line1_surface, (inv_x + 20, inv_y + 35))
-        
-        line2_surface = self.font.render(line2, True, COLORS["message_important"])
-        self.screen.blit(line2_surface, (inv_x + 20, inv_y + 52))
         
         # Items del inventario
         from ..systems.inventory import Inventory
         items = Inventory.get_inventory_display(player)
         
-        y_offset = inv_y + 75  # Más espacio para las instrucciones
+        y_offset = inv_y + 58  # Espacio para la línea de instrucciones
         line_height = FONT_SIZE + 6
         max_visible = 12  # Items visibles
         
@@ -568,6 +566,135 @@ class Renderer:
                 info_text = "Pulsa ENTER para comprar."
                 info_surface = self.font.render(info_text, True, COLORS["white"])
             self.screen.blit(info_surface, (shop_x + 20, info_y))
+    
+    def _render_donation(
+        self,
+        player: Player,
+        amount: int = 0,
+        active_digit: int = 0,
+    ) -> None:
+        """
+        Renderiza el selector de donación de oro.
+        
+        Muestra dos dígitos (decenas y unidades) con flechitas ↑↓.
+        El dígito activo se resalta.
+        
+        Args:
+            player: El jugador (para mostrar oro disponible)
+            amount: Cantidad seleccionada actualmente (0-99)
+            active_digit: Dígito activo (0=unidades, 1=decenas)
+        """
+        # Overlay semi-transparente
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+        overlay.fill(COLORS["black"])
+        overlay.set_alpha(200)
+        self.screen.blit(overlay, (0, 0))
+        
+        # Ventana de donación (compacta)
+        panel_w = 340
+        panel_h = 220
+        panel_x = (WINDOW_WIDTH - panel_w) // 2
+        panel_y = (WINDOW_HEIGHT - panel_h) // 2
+        
+        # Fondo
+        pygame.draw.rect(
+            self.screen, COLORS["darker_gray"],
+            (panel_x, panel_y, panel_w, panel_h)
+        )
+        # Borde
+        pygame.draw.rect(
+            self.screen, COLORS["white"],
+            (panel_x, panel_y, panel_w, panel_h), 2
+        )
+        
+        # Título
+        title = "=== DONACIÓN ==="
+        title_surface = self.font.render(title, True, COLORS["white"])
+        self.screen.blit(
+            title_surface,
+            (panel_x + (panel_w - title_surface.get_width()) // 2, panel_y + 10)
+        )
+        
+        # Oro del jugador
+        gold_text = f"Tu oro: {player.gold}"
+        gold_color = COLORS.get("gold", COLORS["message_important"])
+        gold_surface = self.font.render(gold_text, True, gold_color)
+        self.screen.blit(
+            gold_surface,
+            (panel_x + (panel_w - gold_surface.get_width()) // 2, panel_y + 35)
+        )
+        
+        # Separar cantidad en decenas y unidades
+        tens = amount // 10
+        units = amount % 10
+        
+        # Dimensiones de cada columna de dígito
+        digit_font = pygame.font.SysFont(FONT_NAME, FONT_SIZE + 10, bold=True)
+        arrow_font = pygame.font.SysFont(FONT_NAME, FONT_SIZE + 4)
+        col_w = 50
+        gap = 20
+        total_w = col_w * 2 + gap
+        start_x = panel_x + (panel_w - total_w) // 2
+        center_y = panel_y + 95
+        
+        digits = [(tens, 1), (units, 0)]  # (valor, digit_id)
+        
+        for i, (val, digit_id) in enumerate(digits):
+            cx = start_x + i * (col_w + gap) + col_w // 2
+            is_active = (digit_id == active_digit)
+            
+            # Color del dígito
+            digit_color = COLORS["white"] if is_active else COLORS["gray"]
+            arrow_color = COLORS["white"] if is_active else COLORS.get("dark_gray", (60, 60, 60))
+            
+            # Flecha arriba ▲
+            up_surface = arrow_font.render("▲", True, arrow_color)
+            self.screen.blit(
+                up_surface,
+                (cx - up_surface.get_width() // 2, center_y - 35)
+            )
+            
+            # Dígito
+            digit_surface = digit_font.render(str(val), True, digit_color)
+            self.screen.blit(
+                digit_surface,
+                (cx - digit_surface.get_width() // 2, center_y - 8)
+            )
+            
+            # Subrayado del dígito activo
+            if is_active:
+                underline_y = center_y + digit_surface.get_height() - 5
+                underline_w = max(digit_surface.get_width(), 16)
+                pygame.draw.line(
+                    self.screen, COLORS["white"],
+                    (cx - underline_w // 2, underline_y),
+                    (cx + underline_w // 2, underline_y),
+                    2
+                )
+            
+            # Flecha abajo ▼
+            down_surface = arrow_font.render("▼", True, arrow_color)
+            self.screen.blit(
+                down_surface,
+                (cx - down_surface.get_width() // 2, center_y + 28)
+            )
+        
+        # Total a donar
+        total_text = f"Donar: {amount} oro"
+        total_color = COLORS["white"] if amount > 0 else COLORS["gray"]
+        total_surface = self.font.render(total_text, True, total_color)
+        self.screen.blit(
+            total_surface,
+            (panel_x + (panel_w - total_surface.get_width()) // 2, panel_y + panel_h - 60)
+        )
+        
+        # Instrucciones
+        hint = "←→ Dígito   ↑↓ Valor   ENTER Donar   ESC Cancelar"
+        hint_surface = self.font.render(hint, True, COLORS.get("dark_gray", (80, 80, 80)))
+        self.screen.blit(
+            hint_surface,
+            (panel_x + (panel_w - hint_surface.get_width()) // 2, panel_y + panel_h - 30)
+        )
     
     def _render_death_screen(self) -> None:
         """Renderiza la pantalla de muerte."""

@@ -154,6 +154,22 @@ class DevCommandManager:
             self._cmd_merchant
         )
         
+        # Comando: shop_donate
+        self.register_command(
+            "shop_donate",
+            "Muestra estado de donaciones o establece el total donado",
+            "shop_donate [cantidad]",
+            self._cmd_shop_donate
+        )
+        
+        # Comando: shop_restock
+        self.register_command(
+            "shop_restock",
+            "Activa el restock de la tienda del comerciante (gratis)",
+            "shop_restock",
+            self._cmd_shop_restock
+        )
+        
         # Comando: help
         self.register_command(
             "help",
@@ -237,51 +253,44 @@ class DevCommandManager:
     def _cmd_give(self, game: 'Game', args: List[str]) -> List[str]:
         """Comando: give <item>"""
         if not args:
-            return ["Uso: give <item> (ej: give health_potion)"]
+            from ..items.item import get_all_item_ids
+            available = ", ".join(get_all_item_ids())
+            return [
+                "Uso: give <item_id> (ej: give health_potion)",
+                f"IDs válidos: {available}"
+            ]
         
-        item_type = args[0].lower()
+        item_id = args[0].lower()
+        
+        # Compatibilidad: aliases cortos
+        aliases = {
+            "potion": "health_potion",
+            "greater_potion": "greater_health_potion",
+            "poison": "poison_potion",
+        }
+        item_id = aliases.get(item_id, item_id)
+        
+        # Compatibilidad: prefijos legacy "weapon_" y "armor_"
+        if item_id.startswith("weapon_"):
+            item_id = item_id.replace("weapon_", "", 1)
+        elif item_id.startswith("armor_"):
+            item_id = item_id.replace("armor_", "", 1)
         
         try:
-            from ..items.potion import Potion
-            from ..items.weapon import Weapon
-            from ..items.armor import Armor
-            from ..items.special import Amulet
-            from ..config import WEAPON_DATA, ARMOR_DATA
+            from ..items.item import create_item
             
-            item = None
-            if item_type == "health_potion" or item_type == "potion":
-                item = Potion(game.player.x, game.player.y, potion_type="health_potion", name="Poción de Salud", effect="heal", value=10)
-            elif item_type == "greater_health_potion" or item_type == "greater_potion":
-                item = Potion(game.player.x, game.player.y, potion_type="greater_health_potion", name="Poción de Salud Mayor", effect="heal", value=30)
-            elif item_type == "strength_potion":
-                item = Potion(game.player.x, game.player.y, potion_type="strength_potion", name="Poción de Fuerza", effect="strength", value=3, duration=10)
-            elif item_type == "poison_potion" or item_type == "poison":
-                item = Potion(game.player.x, game.player.y, potion_type="poison_potion", name="Poción de Veneno", effect="poison", value=-15)
-            elif item_type.startswith("weapon_"):
-                weapon_name = item_type.replace("weapon_", "")
-                if weapon_name in WEAPON_DATA:
-                    weapon_data = WEAPON_DATA[weapon_name]
-                    item = Weapon(game.player.x, game.player.y, weapon_type=weapon_name, name=weapon_data["name"], attack_bonus=weapon_data["attack_bonus"])
-                else:
-                    return [f"Arma desconocida: {weapon_name}"]
-            elif item_type.startswith("armor_"):
-                armor_name = item_type.replace("armor_", "")
-                if armor_name in ARMOR_DATA:
-                    armor_data = ARMOR_DATA[armor_name]
-                    item = Armor(game.player.x, game.player.y, armor_type=armor_name, name=armor_data["name"], defense_bonus=armor_data["defense_bonus"])
-                else:
-                    return [f"Armadura desconocida: {armor_name}"]
-            elif item_type == "amulet":
-                item = Amulet(game.player.x, game.player.y)
+            item = create_item(item_id, x=game.player.x, y=game.player.y)
+            
+            if item is None:
+                from ..items.item import get_all_item_ids
+                available = ", ".join(get_all_item_ids())
+                return [f"Item desconocido: {item_id}", f"IDs válidos: {available}"]
+            
+            if len(game.player.inventory) < 26:
+                game.player.inventory.append(item)
+                return [f"Item '{item.name}' añadido al inventario."]
             else:
-                return [f"Item desconocido: {item_type}"]
-            
-            if item:
-                if len(game.player.inventory) < 26:
-                    game.player.inventory.append(item)
-                    return [f"Item '{item.name}' añadido al inventario."]
-                else:
-                    return ["Inventario lleno."]
+                return ["Inventario lleno."]
         except Exception as e:
             return [f"Error: {e}"]
     
@@ -393,13 +402,14 @@ class DevCommandManager:
     def _cmd_amulet(self, game: 'Game', _args: List[str]) -> List[str]:
         """Comando: amulet"""
         from ..items.special import Amulet
+        from ..items.item import create_item
         
         # Verificar si ya tiene el amuleto
         has_amulet = any(isinstance(item, Amulet) for item in game.player.inventory)
         if has_amulet:
             return ["Ya tienes el Amuleto de Yendor."]
         
-        amulet = Amulet(game.player.x, game.player.y)
+        amulet = create_item("amulet", x=game.player.x, y=game.player.y)
         if len(game.player.inventory) < 26:
             game.player.inventory.append(amulet)
             game.player.has_amulet = True
@@ -751,6 +761,81 @@ class DevCommandManager:
         return [
             "[DEV] Comerciante forzado al 100% en plantas pares.",
             "Este cambio NO se guarda. Se resetea al morir o cerrar."
+        ]
+    
+    def _cmd_shop_donate(self, _game: 'Game', args: List[str]) -> List[str]:
+        """Comando: shop_donate [cantidad] — Muestra estado o establece total donado."""
+        from ..systems.events import event_manager
+        from ..systems.shop import (
+            refresh_merchant_shop, get_unlocked_count,
+            get_unlock_thresholds, MERCHANT_ITEM_POOL,
+        )
+        
+        current_total = event_manager.get_data("merchant_donated_total", 0)
+        restock_paid = event_manager.get_data("merchant_restock_paid", False)
+        unlocked = get_unlocked_count(current_total)
+        thresholds = get_unlock_thresholds()
+        max_items = len(MERCHANT_ITEM_POOL)
+        
+        if not args:
+            # Sin argumentos: mostrar estado actual
+            messages = [
+                f"=== TIENDA DEL COMERCIANTE ===",
+                f"Total donado: {current_total} oro",
+                f"Items desbloqueados: {unlocked}/{max_items}",
+                f"Restock pagado: {'Sí' if restock_paid else 'No'}",
+                f"",
+            ]
+            for i, (item_id, price) in enumerate(MERCHANT_ITEM_POOL):
+                status = "✓" if i < unlocked else "✗"
+                threshold = thresholds[i]
+                messages.append(f"  {status} {item_id} (precio: {price}) — umbral: {threshold}")
+            
+            if unlocked < max_items:
+                next_threshold = thresholds[unlocked]
+                messages.append(f"")
+                messages.append(f"Siguiente desbloqueo en: {next_threshold - current_total} oro más")
+            messages.append(f"Uso: shop_donate <total> para establecer el total donado")
+            return messages
+        
+        try:
+            new_total = int(args[0])
+            if new_total < 0:
+                return ["El total donado no puede ser negativo."]
+            
+            event_manager.set_data("merchant_donated_total", new_total)
+            refresh_merchant_shop()
+            
+            new_unlocked = get_unlocked_count(new_total)
+            messages = [f"[DEV] Total donado: {current_total} → {new_total}"]
+            messages.append(f"Items desbloqueados: {new_unlocked}/{max_items}")
+            if not restock_paid:
+                messages.append("NOTA: El restock no está pagado. La tienda seguirá vacía.")
+                messages.append("Usa 'shop_restock' para activar el restock.")
+            return messages
+        except ValueError:
+            return ["Uso: shop_donate <total>  (ej: shop_donate 50)"]
+    
+    def _cmd_shop_restock(self, _game: 'Game', _args: List[str]) -> List[str]:
+        """Comando: shop_restock — Activa el restock de la tienda (gratis, esta run)."""
+        from ..systems.events import event_manager
+        from ..systems.shop import refresh_merchant_shop, get_unlocked_count
+        
+        already_paid = event_manager.get_data("merchant_restock_paid", False)
+        event_manager.set_data("merchant_restock_paid", True)
+        refresh_merchant_shop()
+        
+        donated_total = event_manager.get_data("merchant_donated_total", 0)
+        unlocked = get_unlocked_count(donated_total)
+        
+        if already_paid:
+            return [
+                "[DEV] El restock ya estaba activo. Tienda refrescada.",
+                f"Items desbloqueados: {unlocked} (donado: {donated_total})",
+            ]
+        return [
+            "[DEV] Restock activado. La tienda tiene stock completo.",
+            f"Items desbloqueados: {unlocked} (donado: {donated_total})",
         ]
     
     def _cmd_help(self, _game: 'Game', _args: List[str]) -> List[str]:

@@ -21,8 +21,8 @@ def register_all_game_events() -> None:
     # Registrar evento del Stranger
     register_stranger_event()
     
-    # Aquí puedes añadir más eventos
-    pass
+    # Registrar evento de primera moneda recogida (desbloquea Comerciante Errante)
+    register_first_gold_pickup_event()
 
 
 def register_stranger_event() -> None:
@@ -268,3 +268,21 @@ def register_npc_floor5_event() -> None:
     # Registrar eventos
     event_manager.register_event(event_npc_met)
     event_manager.register_event(event_npc_lobby)
+
+
+def register_first_gold_pickup_event() -> None:
+    """
+    Registra el evento de primera moneda de oro recogida.
+    
+    Se activa cuando el jugador recoge su primera moneda de oro del suelo.
+    Desbloquea al Comerciante Errante en el lobby.
+    """
+    event_first_gold = GameEvent(
+        event_id="first_gold_pickup",
+        name="Primera moneda recogida",
+        description="El jugador recogió su primera moneda de oro del suelo",
+        persistent=True,
+        auto_trigger=False  # Se activa manualmente desde inventory.py
+    )
+    
+    event_manager.register_event(event_first_gold)
