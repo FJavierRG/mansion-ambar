@@ -44,6 +44,9 @@ MAX_ROOM_MONSTERS: int = 4
 MAX_ROOM_ITEMS: int = 1  # Máximo 1 item por habitación para menor abundancia
 MAX_DUNGEON_LEVEL: int = 10
 
+# Probabilidad de que una habitación tenga puertas en todas sus entradas
+DOOR_CHANCE: float = 0.3
+
 # ============================================================================
 # FIELD OF VIEW
 # ============================================================================
@@ -79,6 +82,8 @@ SYMBOLS: Dict[str, str] = {
     "wall": "#",
     "floor": ".",
     "door": "+",
+    "door_closed": "=",     # Puerta cerrada (barrera)
+    "door_open": "\u2016",      # Puerta abierta (rotada 90°)
     "stairs_down": ">",
     "stairs_up": "<",
     "potion": "!",
@@ -127,6 +132,7 @@ COLORS: Dict[str, Tuple[int, int, int]] = {
     "floor": (50, 50, 50),
     "floor_dark": (25, 25, 30),
     "door": (139, 69, 19),
+    "door_open": (101, 67, 33),
     "stairs": (255, 215, 0),
     
     # Monstruos
@@ -446,3 +452,5 @@ class GameState:
     DIALOG = "dialog"  # Estado de diálogo/texto interactivo
     CONSOLE = "console"  # Consola de comandos de desarrollo
     SAVE_MENU = "save_menu"  # Menú de selección de guardados
+    SHOP = "shop"  # Tienda del comerciante
+    OPTIONS = "options"  # Menú de opciones (centralizado)

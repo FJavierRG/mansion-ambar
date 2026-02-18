@@ -16,6 +16,7 @@ from .message_log import MessageLog
 from .sprite_manager import sprite_manager
 from .dialog import dialog_renderer
 from ..systems.dialog_manager import dialog_manager
+from ..systems.music import music_manager
 
 if TYPE_CHECKING:
     from ..world.dungeon import Dungeon
@@ -85,7 +86,11 @@ class Renderer:
         animation_manager: Optional[AnimationManager] = None,
         console_input: str = "",
         save_menu_selected: int = 0,
-        save_menu_mode: str = "load"
+        save_menu_mode: str = "load",
+        shop: Optional[Any] = None,
+        shop_cursor: int = 0,
+        pause_cursor: int = 0,
+        options_cursor: int = 0
     ) -> None:
         """
         Renderiza todo el juego.
@@ -100,6 +105,8 @@ class Renderer:
             cursor: Índice del item seleccionado en el inventario
             scroll: Offset de scroll del inventario
             animation_manager: Gestor de animaciones
+            shop: Instancia de Shop (para estado SHOP)
+            shop_cursor: Índice del item seleccionado en la tienda
         """
         # Guardar referencia para métodos internos
         self._current_animation_manager = animation_manager
@@ -139,13 +146,17 @@ class Renderer:
         elif game_state == GameState.VICTORY:
             self._render_victory_screen()
         elif game_state == GameState.PAUSED:
-            self._render_pause_menu()
+            self._render_pause_menu(pause_cursor)
+        elif game_state == GameState.OPTIONS:
+            self._render_options_menu(options_cursor)
         elif game_state == GameState.DIALOG:
             self._render_dialog()
         elif game_state == GameState.CONSOLE:
             self._render_console(console_input)
         elif game_state == GameState.SAVE_MENU:
             self._render_save_menu(save_menu_selected, save_menu_mode)
+        elif game_state == GameState.SHOP:
+            self._render_shop(player, shop, shop_cursor)
         
         # Actualizar pantalla
         pygame.display.flip()
@@ -159,7 +170,7 @@ class Renderer:
                 tile = dungeon.tiles[x][y]
                 
                 if tile.visible or tile.explored:
-                    # Verificar si es una escalera visible (usar sprite)
+                    # Verificar si es terreno especial visible (usar sprite)
                     if tile.visible:
                         if tile.tile_type == TileType.STAIRS_DOWN:
                             sprite = sprite_manager.get_terrain_sprite("stairs_down")
@@ -171,6 +182,21 @@ class Renderer:
                             if sprite:
                                 self._draw_sprite(x, y, sprite)
                                 continue
+                        elif tile.tile_type == TileType.DOOR:
+                            sprite_key = "door_open" if tile.is_open else "door_closed"
+                            sprite = sprite_manager.get_terrain_sprite(sprite_key)
+                            if sprite:
+                                self._draw_sprite(x, y, sprite)
+                                continue
+                    elif tile.explored and tile.tile_type == TileType.DOOR:
+                        # Puertas exploradas pero no visibles: sprite oscurecido
+                        sprite_key = "door_open" if tile.is_open else "door_closed"
+                        sprite = sprite_manager.get_terrain_sprite(sprite_key)
+                        if sprite:
+                            dark_sprite = sprite.copy()
+                            dark_sprite.fill((80, 80, 80), special_flags=pygame.BLEND_RGB_MULT)
+                            self._draw_sprite(x, y, dark_sprite)
+                            continue
                     
                     # Fallback a ASCII para todo lo demás
                     char = tile.char
@@ -416,6 +442,133 @@ class Renderer:
             self.screen.blit(equip_surface, (inv_x + 20, y_offset))
             y_offset += line_height
     
+    def _render_shop(
+        self,
+        player: Player,
+        shop: Optional[Any] = None,
+        cursor: int = 0
+    ) -> None:
+        """Renderiza la pantalla de la tienda."""
+        # Overlay semi-transparente
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+        overlay.fill(COLORS["black"])
+        overlay.set_alpha(200)
+        self.screen.blit(overlay, (0, 0))
+        
+        # Ventana de la tienda
+        shop_width = 550
+        shop_height = 400
+        shop_x = (WINDOW_WIDTH - shop_width) // 2
+        shop_y = (WINDOW_HEIGHT - shop_height) // 2
+        
+        # Fondo
+        pygame.draw.rect(
+            self.screen,
+            COLORS["darker_gray"],
+            (shop_x, shop_y, shop_width, shop_height)
+        )
+        # Borde
+        pygame.draw.rect(
+            self.screen,
+            COLORS["white"],
+            (shop_x, shop_y, shop_width, shop_height),
+            2
+        )
+        
+        # Título
+        shop_name = shop.name if shop else "Tienda"
+        title = f"=== {shop_name.upper()} ==="
+        title_surface = self.font.render(title, True, COLORS["white"])
+        self.screen.blit(
+            title_surface,
+            (shop_x + (shop_width - title_surface.get_width()) // 2, shop_y + 10)
+        )
+        
+        # Oro del jugador
+        gold_text = f"Tu oro: {player.gold}"
+        gold_color = COLORS.get("gold", COLORS["message_important"])
+        gold_surface = self.font.render(gold_text, True, gold_color)
+        self.screen.blit(gold_surface, (shop_x + shop_width - gold_surface.get_width() - 20, shop_y + 12))
+        
+        # Instrucciones
+        instructions = "↑↓ Navegar    ENTER Comprar    ESC Cerrar"
+        instr_surface = self.font.render(instructions, True, COLORS["gray"])
+        self.screen.blit(instr_surface, (shop_x + 20, shop_y + 35))
+        
+        # Línea separadora
+        separator_y = shop_y + 55
+        pygame.draw.line(
+            self.screen,
+            COLORS["gray"],
+            (shop_x + 10, separator_y),
+            (shop_x + shop_width - 10, separator_y),
+            1
+        )
+        
+        # Items de la tienda
+        line_height = FONT_SIZE + 8
+        y_offset = shop_y + 65
+        
+        if not shop or not shop.items:
+            empty_text = "No hay mercancía disponible."
+            empty_surface = self.font.render(empty_text, True, COLORS["gray"])
+            self.screen.blit(empty_surface, (shop_x + 20, y_offset))
+        else:
+            for i, shop_item in enumerate(shop.items):
+                is_selected = (i == cursor)
+                can_afford = player.gold >= shop_item.price
+                
+                # Fondo de selección
+                if is_selected:
+                    selection_rect = pygame.Rect(
+                        shop_x + 15,
+                        y_offset - 2,
+                        shop_width - 30,
+                        line_height
+                    )
+                    pygame.draw.rect(self.screen, COLORS["gray"], selection_rect)
+                
+                # Indicador de selección
+                prefix = "► " if is_selected else "  "
+                
+                # Color del texto
+                if is_selected:
+                    color = COLORS["black"]
+                elif not can_afford:
+                    color = COLORS.get("message_death", COLORS["gray"])
+                else:
+                    color = COLORS["white"]
+                
+                # Nombre del item + descripción
+                item_text = f"{prefix}{shop_item.name}  ({shop_item.description})"
+                item_surface = self.font.render(item_text, True, color)
+                self.screen.blit(item_surface, (shop_x + 20, y_offset))
+                
+                # Precio (alineado a la derecha)
+                price_text = f"{shop_item.price} oro"
+                price_color = color if can_afford else COLORS.get("message_death", COLORS["gray"])
+                if is_selected:
+                    price_color = COLORS["black"]
+                price_surface = self.font.render(price_text, True, price_color)
+                self.screen.blit(
+                    price_surface,
+                    (shop_x + shop_width - price_surface.get_width() - 20, y_offset)
+                )
+                
+                y_offset += line_height
+        
+        # Mensaje informativo al fondo
+        info_y = shop_y + shop_height - 30
+        if shop and shop.items and 0 <= cursor < len(shop.items):
+            selected_item = shop.items[cursor]
+            if player.gold < selected_item.price:
+                info_text = f"Necesitas {selected_item.price - player.gold} monedas más."
+                info_surface = self.font.render(info_text, True, COLORS.get("message_death", COLORS["gray"]))
+            else:
+                info_text = "Pulsa ENTER para comprar."
+                info_surface = self.font.render(info_text, True, COLORS["white"])
+            self.screen.blit(info_surface, (shop_x + 20, info_y))
+    
     def _render_death_screen(self) -> None:
         """Renderiza la pantalla de muerte."""
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -483,41 +636,176 @@ class Renderer:
              (WINDOW_HEIGHT - restart_surface.get_height()) // 2 + 50)
         )
     
-    def _render_pause_menu(self) -> None:
-        """Renderiza el menú de pausa."""
+    def _render_pause_menu(self, selected: int = 0) -> None:
+        """Renderiza el menú de pausa con navegación por cursor."""
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
         overlay.fill(COLORS["black"])
-        overlay.set_alpha(150)
+        overlay.set_alpha(180)
         self.screen.blit(overlay, (0, 0))
         
-        # Texto de pausa
-        pause_text = "JUEGO PAUSADO"
-        pause_surface = self.font.render(pause_text, True, COLORS["white"])
-        pause_surface = pygame.transform.scale(
-            pause_surface,
-            (pause_surface.get_width() * 2, pause_surface.get_height() * 2)
+        # Título
+        title_text = "PAUSA"
+        title_surface = self.font.render(title_text, True, COLORS["white"])
+        title_surface = pygame.transform.scale(
+            title_surface,
+            (title_surface.get_width() * 2, title_surface.get_height() * 2)
         )
+        title_y = WINDOW_HEIGHT // 2 - 80
         self.screen.blit(
-            pause_surface,
-            ((WINDOW_WIDTH - pause_surface.get_width()) // 2,
-             (WINDOW_HEIGHT - pause_surface.get_height()) // 2 - 50)
+            title_surface,
+            ((WINDOW_WIDTH - title_surface.get_width()) // 2, title_y)
         )
         
-        # Opciones
-        options = [
-            "[ESC] Continuar",
-            "[S] Guardar y salir",
-            "[Q] Salir sin guardar"
-        ]
+        # Línea decorativa
+        line_y = title_y + title_surface.get_height() + 10
+        line_width = 200
+        line_x = (WINDOW_WIDTH - line_width) // 2
+        pygame.draw.line(
+            self.screen, COLORS["gray"],
+            (line_x, line_y), (line_x + line_width, line_y), 1
+        )
         
-        y_offset = (WINDOW_HEIGHT - pause_surface.get_height()) // 2 + 30
-        for option in options:
-            opt_surface = self.font.render(option, True, COLORS["gray"])
+        # Opciones del menú
+        options = ["Continuar", "Opciones", "Salir"]
+        
+        y_offset = line_y + 25
+        for i, option in enumerate(options):
+            if i == selected:
+                # Opción seleccionada: resaltada con indicador
+                text = f"> {option} <"
+                color = COLORS["white"]
+            else:
+                text = option
+                color = COLORS["gray"]
+            
+            opt_surface = self.font.render(text, True, color)
             self.screen.blit(
                 opt_surface,
                 ((WINDOW_WIDTH - opt_surface.get_width()) // 2, y_offset)
             )
-            y_offset += FONT_SIZE + 10
+            y_offset += FONT_SIZE + 12
+        
+        # Hint de controles
+        hint_y = y_offset + 20
+        hint_text = "[↑↓] Navegar   [Enter] Seleccionar   [ESC] Continuar"
+        hint_surface = self.font.render(hint_text, True, (100, 100, 100))
+        self.screen.blit(
+            hint_surface,
+            ((WINDOW_WIDTH - hint_surface.get_width()) // 2, hint_y)
+        )
+    
+    def _render_options_menu(self, selected: int = 0) -> None:
+        """Renderiza el menú de opciones centralizado."""
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+        overlay.fill(COLORS["black"])
+        overlay.set_alpha(200)
+        self.screen.blit(overlay, (0, 0))
+        
+        # Panel central
+        panel_w, panel_h = 400, 250
+        panel_x = (WINDOW_WIDTH - panel_w) // 2
+        panel_y = (WINDOW_HEIGHT - panel_h) // 2
+        
+        # Fondo del panel
+        panel_surface = pygame.Surface((panel_w, panel_h))
+        panel_surface.fill((20, 20, 30))
+        panel_surface.set_alpha(240)
+        self.screen.blit(panel_surface, (panel_x, panel_y))
+        
+        # Borde del panel
+        pygame.draw.rect(
+            self.screen, COLORS["gray"],
+            (panel_x, panel_y, panel_w, panel_h), 1
+        )
+        
+        # Título
+        title_text = "OPCIONES"
+        title_surface = self.font.render(title_text, True, COLORS["white"])
+        title_scaled = pygame.transform.scale(
+            title_surface,
+            (title_surface.get_width() * 2, title_surface.get_height() * 2)
+        )
+        self.screen.blit(
+            title_scaled,
+            ((WINDOW_WIDTH - title_scaled.get_width()) // 2, panel_y + 15)
+        )
+        
+        # Línea decorativa
+        line_y = panel_y + 15 + title_scaled.get_height() + 8
+        pygame.draw.line(
+            self.screen, COLORS["gray"],
+            (panel_x + 20, line_y), (panel_x + panel_w - 20, line_y), 1
+        )
+        
+        # === Opción 0: Volumen ===
+        vol_y = line_y + 20
+        current_vol = music_manager.get_volume()
+        vol_percent = int(current_vol * 100)
+        
+        if selected == 0:
+            vol_label = f"> Volumen: {vol_percent}%"
+            vol_color = COLORS["white"]
+        else:
+            vol_label = f"  Volumen: {vol_percent}%"
+            vol_color = COLORS["gray"]
+        
+        vol_surface = self.font.render(vol_label, True, vol_color)
+        self.screen.blit(vol_surface, (panel_x + 30, vol_y))
+        
+        # Barra de volumen
+        bar_y = vol_y + FONT_SIZE + 8
+        bar_x = panel_x + 50
+        bar_width = panel_w - 100
+        bar_height = 12
+        
+        # Fondo de la barra
+        pygame.draw.rect(
+            self.screen, (40, 40, 50),
+            (bar_x, bar_y, bar_width, bar_height)
+        )
+        # Borde de la barra
+        pygame.draw.rect(
+            self.screen, COLORS["gray"],
+            (bar_x, bar_y, bar_width, bar_height), 1
+        )
+        # Relleno de la barra
+        fill_width = int(bar_width * current_vol)
+        if fill_width > 0:
+            bar_color = COLORS["white"] if selected == 0 else COLORS["gray"]
+            pygame.draw.rect(
+                self.screen, bar_color,
+                (bar_x + 1, bar_y + 1, fill_width - 2, bar_height - 2)
+            )
+        
+        # Hint de ajuste si está seleccionado
+        if selected == 0:
+            adj_text = "[← →] Ajustar volumen"
+            adj_surface = self.font.render(adj_text, True, (120, 120, 140))
+            self.screen.blit(adj_surface, (panel_x + 50, bar_y + bar_height + 5))
+        
+        # === Opción 1: Volver ===
+        back_y = bar_y + bar_height + 35
+        if selected == 1:
+            back_text = "> Volver <"
+            back_color = COLORS["white"]
+        else:
+            back_text = "  Volver"
+            back_color = COLORS["gray"]
+        
+        back_surface = self.font.render(back_text, True, back_color)
+        self.screen.blit(
+            back_surface,
+            ((WINDOW_WIDTH - back_surface.get_width()) // 2, back_y)
+        )
+        
+        # Hint de controles al fondo del panel
+        hint_y = panel_y + panel_h - FONT_SIZE - 10
+        hint_text = "[↑↓] Navegar   [Enter] Seleccionar   [ESC] Volver"
+        hint_surface = self.font.render(hint_text, True, (80, 80, 90))
+        self.screen.blit(
+            hint_surface,
+            ((WINDOW_WIDTH - hint_surface.get_width()) // 2, hint_y)
+        )
     
     def _render_dialog(self) -> None:
         """Renderiza el diálogo o texto actual."""
@@ -633,6 +921,9 @@ class Renderer:
         """
         Dibuja un sprite con offset de animación.
         
+        Soporta sprites más grandes que TILE_SIZE (ej: 32x32 en grid de 16x16).
+        Los sprites grandes se centran horizontalmente y se anclan abajo.
+        
         Args:
             x: Posición X base (en tiles)
             y: Posición Y base (en tiles)
@@ -640,8 +931,17 @@ class Renderer:
             offset_x: Offset X en tiles (puede ser fraccionario)
             offset_y: Offset Y en tiles (puede ser fraccionario)
         """
-        pixel_x = int((x + offset_x) * TILE_SIZE)
-        pixel_y = int((y + offset_y) * TILE_SIZE)
+        sprite_w = sprite.get_width()
+        sprite_h = sprite.get_height()
+        
+        if sprite_w > TILE_SIZE or sprite_h > TILE_SIZE:
+            # Sprite más grande que un tile: centrar horizontalmente, anclar abajo
+            pixel_x = int((x + offset_x) * TILE_SIZE) + (TILE_SIZE - sprite_w) // 2
+            pixel_y = int((y + offset_y) * TILE_SIZE) + (TILE_SIZE - sprite_h)
+        else:
+            pixel_x = int((x + offset_x) * TILE_SIZE)
+            pixel_y = int((y + offset_y) * TILE_SIZE)
+        
         self.screen.blit(sprite, (pixel_x, pixel_y))
     
     def _render_interaction_prompts(
@@ -689,9 +989,15 @@ class Renderer:
                         text_w = text_surface.get_width()
                         text_h = text_surface.get_height()
                         
+                        # Calcular offset extra para sprites más grandes que TILE_SIZE
+                        entity_sprite = getattr(entity, 'sprite', None)
+                        sprite_extra_h = 0
+                        if entity_sprite and entity_sprite.get_height() > TILE_SIZE:
+                            sprite_extra_h = entity_sprite.get_height() - TILE_SIZE
+                        
                         # Posición: centrado sobre el sprite del NPC
                         pixel_x = entity.x * TILE_SIZE + TILE_SIZE // 2
-                        pixel_y = entity.y * TILE_SIZE - text_h - 4
+                        pixel_y = entity.y * TILE_SIZE - sprite_extra_h - text_h - 4
                         
                         # Fondo con bordes redondeados
                         padding_x = 4
@@ -888,9 +1194,7 @@ class Renderer:
             "Controles:",
             "Movimiento: Flechas / Numpad / Vi-keys (hjklyubn)",
             "[ESPACIO] Interactuar  [i] Inventario",
-            "[.] Esperar turno",
-            "",
-            "Música: [M] Silenciar  [+/-] Volumen"
+            "[.] Esperar turno"
         ]
         
         y_offset += 50

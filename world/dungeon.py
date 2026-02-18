@@ -10,7 +10,7 @@ from .room import Room
 from ..config import (
     MAP_WIDTH, MAP_HEIGHT, ROOM_MIN_SIZE, ROOM_MAX_SIZE,
     MAX_ROOMS, MAX_ROOM_MONSTERS, MAX_ROOM_ITEMS, MAX_DUNGEON_LEVEL,
-    SYMBOLS
+    SYMBOLS, DOOR_CHANCE
 )
 
 if TYPE_CHECKING:
@@ -119,6 +119,9 @@ class Dungeon:
                 self.tiles[down_x][down_y] = Tile(TileType.STAIRS_DOWN)
                 self.stairs_down = (down_x, down_y)
         
+        # Colocar puertas en entradas de habitaciones (después de escaleras)
+        self._place_doors()
+        
         # Poblar con monstruos e items
         self._populate()
         
@@ -176,6 +179,91 @@ class Dungeon:
         for y in range(min(y1, y2), max(y1, y2) + 1):
             if 0 < x < self.width - 1 and 0 < y < self.height - 1:
                 self.tiles[x][y] = Tile(TileType.FLOOR)
+    
+    def _place_doors(self) -> None:
+        """
+        Coloca puertas en las entradas de habitaciones.
+        
+        Cada habitación tiene un DOOR_CHANCE (30%) de tener puertas.
+        Si una habitación tiene puertas, TODAS sus entradas las reciben.
+        """
+        for room in self.rooms:
+            if random.random() > DOOR_CHANCE:
+                continue
+            
+            candidates = self._find_door_candidates(room)
+            for x, y, orientation in candidates:
+                # No poner puerta sobre escaleras
+                if (self.stairs_down and (x, y) == self.stairs_down):
+                    continue
+                if (self.stairs_up and (x, y) == self.stairs_up):
+                    continue
+                
+                self.tiles[x][y] = Tile(TileType.DOOR)
+                self.tiles[x][y].is_open = False
+                self.tiles[x][y].orientation = orientation
+    
+    def _find_door_candidates(self, room: Room) -> List[Tuple[int, int, str]]:
+        """
+        Encuentra las posiciones candidatas para puertas en el perímetro de una habitación.
+        
+        Una posición es candidata si:
+        1. Está en el borde de la habitación (la posición de la "pared")
+        2. Es un tile FLOOR (un túnel la ha atravesado)
+        3. Tiene paredes en AMBOS lados perpendiculares (hueco de exactamente 1 tile)
+        
+        Esto garantiza que:
+        - Solo se ponen puertas en pasillos de 1 tile de ancho
+        - No aparecen puertas falsas en esquinas
+        
+        Args:
+            room: La habitación a analizar
+            
+        Returns:
+            Lista de tuplas (x, y, orientation)
+        """
+        candidates: List[Tuple[int, int, str]] = []
+        
+        # Pared izquierda (x = room.x) — orientación "vertical"
+        for y in range(room.y + 1, room.y2):
+            if 0 < room.x < self.width - 1 and 0 < y < self.height - 1:
+                if self.tiles[room.x][y].tile_type == TileType.FLOOR:
+                    # Exigir pared en AMBOS lados (arriba Y abajo) → hueco de 1 tile
+                    wall_above = y > 0 and not self.tiles[room.x][y - 1].walkable
+                    wall_below = y < self.height - 1 and not self.tiles[room.x][y + 1].walkable
+                    if wall_above and wall_below:
+                        candidates.append((room.x, y, "vertical"))
+        
+        # Pared derecha (x = room.x2) — orientación "vertical"
+        for y in range(room.y + 1, room.y2):
+            x2 = room.x2
+            if 0 < x2 < self.width - 1 and 0 < y < self.height - 1:
+                if self.tiles[x2][y].tile_type == TileType.FLOOR:
+                    wall_above = y > 0 and not self.tiles[x2][y - 1].walkable
+                    wall_below = y < self.height - 1 and not self.tiles[x2][y + 1].walkable
+                    if wall_above and wall_below:
+                        candidates.append((x2, y, "vertical"))
+        
+        # Pared superior (y = room.y) — orientación "horizontal"
+        for x in range(room.x + 1, room.x2):
+            if 0 < x < self.width - 1 and 0 < room.y < self.height - 1:
+                if self.tiles[x][room.y].tile_type == TileType.FLOOR:
+                    wall_left = x > 0 and not self.tiles[x - 1][room.y].walkable
+                    wall_right = x < self.width - 1 and not self.tiles[x + 1][room.y].walkable
+                    if wall_left and wall_right:
+                        candidates.append((x, room.y, "horizontal"))
+        
+        # Pared inferior (y = room.y2) — orientación "horizontal"
+        for x in range(room.x + 1, room.x2):
+            y2 = room.y2
+            if 0 < x < self.width - 1 and 0 < y2 < self.height - 1:
+                if self.tiles[x][y2].tile_type == TileType.FLOOR:
+                    wall_left = x > 0 and not self.tiles[x - 1][y2].walkable
+                    wall_right = x < self.width - 1 and not self.tiles[x + 1][y2].walkable
+                    if wall_left and wall_right:
+                        candidates.append((x, y2, "horizontal"))
+        
+        return candidates
     
     def _populate(self) -> None:
         """Puebla la mazmorra con monstruos e items."""

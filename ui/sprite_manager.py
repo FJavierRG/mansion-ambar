@@ -38,12 +38,20 @@ class SpriteManager:
         "stranger": "stranger.png",  # NPC especial
         "nieta": "nieta.png",  # Nieta del Stranger
         "alquimista": "alchemist.png",  # Alquimista
+        "comerciante": "merchant.png",  # Comerciante (32x32, no escalar)
     }
     
-    # Mapeo de terreno especial (escaleras)
+    # Sprites que NO deben escalarse a TILE_SIZE (mantienen su tamaño original)
+    NO_SCALE_CREATURES: set = {
+        "comerciante",
+    }
+    
+    # Mapeo de terreno especial (escaleras, puertas)
     TERRAIN_SPRITES: Dict[str, str] = {
         "stairs_down": "Escaleras abajo.png",
         "stairs_up": "Escaleras arriba.png",
+        "door_open": "door_open.png",
+        "door_closed": "door_close.png",
     }
     
     # Mapeo de tipos de item a nombres de archivo
@@ -79,7 +87,8 @@ class SpriteManager:
         
         # Cargar sprites de criaturas
         for creature_type, filename in self.CREATURE_SPRITES.items():
-            sprite = self._load_sprite(self._creatures_path, filename)
+            scale = creature_type not in self.NO_SCALE_CREATURES
+            sprite = self._load_sprite(self._creatures_path, filename, scale=scale)
             if sprite:
                 self._creature_cache[creature_type] = sprite
         
@@ -100,13 +109,14 @@ class SpriteManager:
         print(f"[SpriteManager] Cargados {len(self._item_cache)} sprites de items")
         print(f"[SpriteManager] Cargados {len(self._terrain_cache)} sprites de terreno")
     
-    def _load_sprite(self, folder: str, filename: str) -> Optional[pygame.Surface]:
+    def _load_sprite(self, folder: str, filename: str, scale: bool = True) -> Optional[pygame.Surface]:
         """
         Carga un sprite desde archivo.
         
         Args:
             folder: Carpeta donde está el sprite
             filename: Nombre del archivo
+            scale: Si True, escala al tamaño de tile. Si False, mantiene tamaño original.
             
         Returns:
             Surface de pygame o None si no se pudo cargar
@@ -118,8 +128,8 @@ class SpriteManager:
                 # Cargar con soporte de transparencia
                 sprite = pygame.image.load(filepath).convert_alpha()
                 
-                # Escalar al tamaño de tile si es necesario
-                if sprite.get_width() != TILE_SIZE or sprite.get_height() != TILE_SIZE:
+                # Escalar al tamaño de tile si es necesario (y si se permite)
+                if scale and (sprite.get_width() != TILE_SIZE or sprite.get_height() != TILE_SIZE):
                     sprite = pygame.transform.scale(sprite, (TILE_SIZE, TILE_SIZE))
                 
                 return sprite

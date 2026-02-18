@@ -146,6 +146,14 @@ class DevCommandManager:
             self._cmd_npc_state
         )
         
+        # Comando: merchant
+        self.register_command(
+            "merchant",
+            "Fuerza aparición del comerciante en plantas pares (100%, esta run)",
+            "merchant",
+            self._cmd_merchant
+        )
+        
         # Comando: help
         self.register_command(
             "help",
@@ -735,6 +743,15 @@ class DevCommandManager:
         
         return True
     
+    
+    def _cmd_merchant(self, _game: 'Game', _args: List[str]) -> List[str]:
+        """Comando: merchant — Fuerza aparición del comerciante al 100% en pares (solo esta run, no se guarda)."""
+        from ..content.npcs import merchant as merchant_module
+        merchant_module._dev_force_spawn = True
+        return [
+            "[DEV] Comerciante forzado al 100% en plantas pares.",
+            "Este cambio NO se guarda. Se resetea al morir o cerrar."
+        ]
     
     def _cmd_help(self, _game: 'Game', _args: List[str]) -> List[str]:
         """Comando: help"""

@@ -1,338 +1,162 @@
 """
-Diálogos del NPC Merchant (Comerciante).
-Este es un ejemplo completo de cómo crear un nuevo NPC con múltiples estados.
+Diálogos y configuración del NPC Comerciante (Merchant).
 
-ESTADO INICIAL: greeting (Lobby)
-ESTADO FINAL: trading (Lobby, después de la primera compra)
+DESBLOQUEO: Tras aceptar ayudar al Stranger (yes_response en mision_nieta).
+UBICACIÓN: Plantas pares de la mazmorra (2, 4, 6, 8, 10), 50% de probabilidad.
+
+ESTADOS:
+  shop → Dungeon (plantas pares), abre la tienda al interactuar.
+
+NOTAS:
+  - El FSM está preparado para añadir más estados en el futuro
+    (ej: misiones, desbloqueo de items especiales, etc.)
+  - La compra se gestiona en GameState.SHOP, no en el diálogo.
+  - El diálogo solo ofrece la opción de abrir la tienda.
+  - Sus items se pueden modificar desde cualquier parte del código
+    usando get_merchant_shop().add_item() / remove_item() / etc.
 """
+import random
 from roguelike.systems.text import DialogTree, DialogNode, DialogOption, InteractiveText
 
+# Flag DEV: fuerza aparición 100% en pares (solo memoria, NO se guarda)
+_dev_force_spawn: bool = False
+
 
 # ============================================================================
-# ESTADO: "greeting" (Lobby - Primera vez que lo encuentras)
+# ESTADO: "shop" (Dungeon - Plantas pares, 50% probabilidad)
 # ============================================================================
 
-def create_merchant_greeting_dialog() -> DialogTree:
+def _open_shop_action(player, zone):
     """
-    Crea el diálogo del Merchant cuando lo encuentras por primera vez.
+    Acción del diálogo que señala al juego que debe abrir la tienda.
+    
+    Establece un flag temporal en el jugador que game.py detecta
+    en _on_dialog_closed para transicionar a GameState.SHOP.
+    """
+    player._pending_shop = True
+
+
+def create_merchant_shop_dialog() -> DialogTree:
+    """
+    Crea el diálogo del Comerciante.
+    
+    Ofrece la opción de abrir la tienda o despedirse.
     
     Returns:
-        DialogTree con el diálogo completo
+        DialogTree con el diálogo
     """
-    tree = DialogTree(start_node="greeting")
+    tree = DialogTree(start_node="welcome")
     
-    # Nodo inicial: saludo
-    greeting_node = DialogNode(
-        node_id="greeting",
-        speaker="Merchant",
-        text="¡Bienvenido, viajero! Soy un comerciante ambulante.\n---Tengo algunos objetos útiles que podrían interesarte.\n---¿Quieres ver mi mercancía?",
-        options=[
-            DialogOption("Ver inventario", next_node="inventory"),
-            DialogOption("¿Quién eres?", next_node="who_are_you"),
-            DialogOption("Adiós", next_node=None)  # Cierra el diálogo
-        ]
-    )
-    tree.add_node(greeting_node)
-    
-    # Nodo de inventario
-    inventory_node = DialogNode(
-        node_id="inventory",
-        speaker="Merchant",
-        text="Aquí tienes mi mercancía:\n---[Por ahora solo tengo pociones de vida básicas]\n---¿Te interesa algo?",
-        options=[
-            DialogOption("Comprar poción de vida (50 oro)", next_node="buy_potion"),
-            DialogOption("No, gracias", next_node="greeting")
-        ]
-    )
-    tree.add_node(inventory_node)
-    
-    # Nodo de compra de poción
-    def on_buy_potion(player, zone):
-        """Acción cuando el jugador compra una poción."""
-        from roguelike.systems.events import event_manager
-        
-        # Verificar que el jugador tenga suficiente oro
-        # (Aquí asumimos que el jugador tiene un atributo gold)
-        if hasattr(player, 'gold') and player.gold >= 50:
-            player.gold -= 50
-            # Añadir poción al inventario del jugador
-            from roguelike.items.potion import Potion
-            from roguelike.config import POTION_DATA
-            potion = Potion.from_data(POTION_DATA["health_potion"])
-            player.inventory.append(potion)
-            
-            # Activar evento de primera compra
-            event_manager.trigger_event("merchant_first_sale", player, zone, skip_conditions=True)
-            
-            return True
-        return False
-    
-    buy_potion_node = DialogNode(
-        node_id="buy_potion",
-        speaker="Merchant",
-        text="¡Excelente elección! Una poción de vida te será muy útil.\n---Gracias por tu compra. ¡Vuelve cuando quieras!",
+    welcome_node = DialogNode(
+        node_id="welcome",
+        speaker="Comerciante",
+        text="¡Bienvenido, viajero! Tengo mercancía que podría interesarte.",
         options=[
             DialogOption(
-                "Gracias", 
+                "Ver mercancía",
                 next_node=None,
-                action=lambda p, z: on_buy_potion(p, z) or None  # Ejecuta acción al seleccionar
-            )
-        ]
-    )
-    tree.add_node(buy_potion_node)
-    
-    # Nodo de "¿Quién eres?"
-    who_node = DialogNode(
-        node_id="who_are_you",
-        speaker="Merchant",
-        text="Soy un comerciante que viaja entre las mazmorras.\n---He visto muchas cosas en mis viajes...\n---Pero eso es otra historia. ¿Quieres ver mi mercancía?",
-        options=[
-            DialogOption("Sí, ver inventario", next_node="inventory"),
-            DialogOption("No, gracias", next_node="greeting")
-        ]
-    )
-    tree.add_node(who_node)
-    
-    return tree
-
-
-def create_merchant_greeting_completed() -> InteractiveText:
-    """Diálogo corto cuando el estado 'greeting' está completado."""
-    return InteractiveText.create_simple_text(
-        "¡Bienvenido de nuevo! ¿Necesitas algo más?",
-        title="Merchant",
-        auto_close=False
-    )
-
-
-# ============================================================================
-# ESTADO: "trading" (Lobby - Después de la primera compra)
-# ============================================================================
-
-def create_merchant_trading_dialog() -> DialogTree:
-    """
-    Crea el diálogo del Merchant después de la primera compra.
-    En este estado, el comerciante tiene más opciones disponibles.
-    
-    Returns:
-        DialogTree con el diálogo completo
-    """
-    tree = DialogTree(start_node="welcome_back")
-    
-    # Nodo de bienvenida
-    welcome_node = DialogNode(
-        node_id="welcome_back",
-        speaker="Merchant",
-        text="¡Ah, eres tú! Me alegra verte de nuevo.\n---Ahora que eres un cliente regular, puedo ofrecerte mejores productos.\n---¿Qué te interesa?",
-        options=[
-            DialogOption("Ver inventario mejorado", next_node="better_inventory"),
-            DialogOption("¿Tienes algo especial?", next_node="special_items"),
-            DialogOption("Adiós", next_node=None)
+                action=_open_shop_action
+            ),
+            DialogOption("No, gracias", next_node=None),
         ]
     )
     tree.add_node(welcome_node)
     
-    # Nodo de inventario mejorado
-    better_inventory_node = DialogNode(
-        node_id="better_inventory",
-        speaker="Merchant",
-        text="Aquí tienes mi mejor mercancía:\n---• Poción de vida mayor (100 oro)\n---• Poción de fuerza (150 oro)\n---• Espada corta (200 oro)",
-        options=[
-            DialogOption("Comprar poción de vida mayor", next_node="buy_greater_potion"),
-            DialogOption("Comprar poción de fuerza", next_node="buy_strength_potion"),
-            DialogOption("Comprar espada corta", next_node="buy_sword"),
-            DialogOption("Volver", next_node="welcome_back")
-        ]
-    )
-    tree.add_node(better_inventory_node)
-    
-    # Nodo de compra de poción mayor
-    def on_buy_greater_potion(player, zone):
-        """Acción cuando el jugador compra una poción mayor."""
-        if hasattr(player, 'gold') and player.gold >= 100:
-            player.gold -= 100
-            from roguelike.items.potion import Potion
-            from roguelike.config import POTION_DATA
-            potion = Potion.from_data(POTION_DATA["greater_health_potion"])
-            player.inventory.append(potion)
-            return True
-        return False
-    
-    buy_greater_potion_node = DialogNode(
-        node_id="buy_greater_potion",
-        speaker="Merchant",
-        text="¡Excelente! Esta poción te curará mucho más que la básica.\n---Gracias por tu compra.",
-        options=[
-            DialogOption(
-                "Gracias",
-                next_node=None,
-                action=lambda p, z: on_buy_greater_potion(p, z) or None
-            )
-        ]
-    )
-    tree.add_node(buy_greater_potion_node)
-    
-    # Nodo de compra de poción de fuerza
-    def on_buy_strength_potion(player, zone):
-        """Acción cuando el jugador compra una poción de fuerza."""
-        if hasattr(player, 'gold') and player.gold >= 150:
-            player.gold -= 150
-            from roguelike.items.potion import Potion
-            from roguelike.config import POTION_DATA
-            potion = Potion.from_data(POTION_DATA["strength_potion"])
-            player.inventory.append(potion)
-            return True
-        return False
-    
-    buy_strength_potion_node = DialogNode(
-        node_id="buy_strength_potion",
-        speaker="Merchant",
-        text="¡Buena elección! Esta poción aumentará tu fuerza temporalmente.\n---Úsala con sabiduría.",
-        options=[
-            DialogOption(
-                "Entendido",
-                next_node=None,
-                action=lambda p, z: on_buy_strength_potion(p, z) or None
-            )
-        ]
-    )
-    tree.add_node(buy_strength_potion_node)
-    
-    # Nodo de compra de espada
-    def on_buy_sword(player, zone):
-        """Acción cuando el jugador compra una espada."""
-        if hasattr(player, 'gold') and player.gold >= 200:
-            player.gold -= 200
-            from roguelike.items.weapon import Weapon
-            from roguelike.config import WEAPON_DATA
-            sword = Weapon.from_data(WEAPON_DATA["short_sword"])
-            player.inventory.append(sword)
-            return True
-        return False
-    
-    buy_sword_node = DialogNode(
-        node_id="buy_sword",
-        speaker="Merchant",
-        text="¡Una espada excelente! Esta te ayudará mucho en combate.\n---Que te sirva bien.",
-        options=[
-            DialogOption(
-                "Gracias",
-                next_node=None,
-                action=lambda p, z: on_buy_sword(p, z) or None
-            )
-        ]
-    )
-    tree.add_node(buy_sword_node)
-    
-    # Nodo de items especiales
-    special_items_node = DialogNode(
-        node_id="special_items",
-        speaker="Merchant",
-        text="Hmm... items especiales...\n---Por ahora no tengo nada realmente especial.\n---Pero si sigues explorando las mazmorras, tal vez encuentres algo interesante.\n---O tal vez yo encuentre algo en mis viajes...",
-        options=[
-            DialogOption("Entendido", next_node="welcome_back"),
-            DialogOption("Ver inventario", next_node="better_inventory")
-        ]
-    )
-    tree.add_node(special_items_node)
-    
     return tree
 
 
-def create_merchant_trading_completed() -> InteractiveText:
-    """Diálogo corto cuando el estado 'trading' está completado."""
+def create_merchant_shop_completed() -> InteractiveText:
+    """
+    Diálogo corto cuando el estado 'shop' está completado.
+    
+    En la práctica, este estado nunca se completa (completion_condition=None),
+    así que siempre se usa el diálogo completo. Se mantiene por convención FSM.
+    """
     return InteractiveText.create_simple_text(
-        "¡Bienvenido de nuevo! ¿Necesitas algo más?",
-        title="Merchant",
+        "¿Necesitas algo?",
+        title="Comerciante",
         auto_close=False
     )
+
+
+# ============================================================================
+# CONDICIÓN DE SPAWN
+# ============================================================================
+
+def _merchant_spawn_condition(floor, event_manager) -> bool:
+    """
+    Determina si el comerciante debe aparecer en esta planta.
+    
+    Condiciones (TODAS deben cumplirse):
+      1. El jugador aceptó ayudar al Stranger (yes_response en mision_nieta)
+         — o _dev_force_spawn está activo (ignora requisito de evento)
+      2. La planta es par (2, 4, 6, 8, 10)
+      3. 50% de probabilidad — o 100% si _dev_force_spawn
+    
+    Args:
+        floor: Número de planta actual
+        event_manager: Gestor de eventos para verificar condiciones
+        
+    Returns:
+        True si el comerciante debe spawnear
+    """
+    global _dev_force_spawn
+    
+    # DEV: forzar aparición (salta requisito de evento y probabilidad)
+    if _dev_force_spawn:
+        # Solo mantener requisito de planta par
+        if floor is None or floor % 2 != 0:
+            return False
+        return True
+    
+    # 1. Solo si el jugador aceptó ayudar al Stranger
+    if not event_manager.is_event_triggered("stranger_help_accepted"):
+        return False
+    
+    # 2. Solo en plantas pares
+    if floor is None or floor % 2 != 0:
+        return False
+    
+    # 3. 50% de probabilidad
+    return random.random() < 0.5
 
 
 # ============================================================================
 # REGISTRO DE ESTADOS DEL NPC
 # ============================================================================
-# NOTA: Este NPC es solo un ejemplo. Para que no se spawnee automáticamente,
-# comentamos la función de registro. Si quieres usarlo, descomenta esta función.
 
-# def register_npc_states(manager) -> None:
+def register_npc_states(manager) -> None:
     """
-    Registra todos los estados del Merchant en el sistema FSM.
+    Registra todos los estados del Comerciante en el sistema FSM.
     
     Esta función es llamada automáticamente por el sistema de auto-discovery.
+    
+    ESTADO ACTUAL:
+      - shop: Dungeon, plantas pares, 50% probabilidad.
+              Requiere haber aceptado ayudar al Stranger.
+    
+    PREPARADO PARA FUTURO:
+      - Se pueden añadir más estados con transiciones
+        (ej: "quest_active", "special_stock", etc.)
     
     Args:
         manager: Instancia de NPCStateManager
     """
-    from roguelike.systems.npc_states import NPCStateConfig, StateTransition
-    from roguelike.systems.events import event_manager
+    from roguelike.systems.npc_states import NPCStateConfig
     
-    # Estado "greeting" - Lobby, primera vez que lo encuentras
-    manager.register_npc_state("Merchant", NPCStateConfig(
-        state_id="greeting",
-        zone_type="lobby",
-        position=(50, 20),  # Posición fija en el lobby
-        dialog_tree_func=create_merchant_greeting_dialog,
-        completed_dialog_func=create_merchant_greeting_completed,
-        completion_condition=lambda p, z: event_manager.is_event_triggered("merchant_met"),
-        transitions=[
-            StateTransition(
-                target_state="trading",
-                condition=lambda p, z: event_manager.is_event_triggered("merchant_first_sale"),
-                description="Después de la primera compra"
-            )
-        ]
+    # Estado "shop" - Dungeon, plantas pares, 50% probabilidad
+    manager.register_npc_state("Comerciante", NPCStateConfig(
+        state_id="shop",
+        zone_type="dungeon",
+        floor=None,  # Cualquier planta (filtrado por spawn_condition)
+        position=None,  # Posición aleatoria en la mazmorra
+        char="$",
+        color="gold",
+        dialog_tree_func=create_merchant_shop_dialog,
+        completed_dialog_func=create_merchant_shop_completed,
+        # Sin completion_condition: el estado nunca se "completa",
+        # siempre muestra el diálogo completo con opción de abrir tienda.
+        completion_condition=None,
+        # Spawn condition: plantas pares + 50% + stranger_help_accepted
+        spawn_condition=_merchant_spawn_condition,
     ))
-    
-    # Estado "trading" - Lobby, después de la primera compra (estado final)
-    manager.register_npc_state("Merchant", NPCStateConfig(
-        state_id="trading",
-        zone_type="lobby",
-        position=(50, 20),  # Misma posición
-        dialog_tree_func=create_merchant_trading_dialog,
-        completed_dialog_func=create_merchant_trading_completed,
-        completion_condition=lambda p, z: event_manager.is_event_triggered("merchant_first_sale"),
-        # No tiene transiciones, es el estado final
-    ))
-
-
-# ============================================================================
-# NOTAS PARA DESARROLLADORES
-# ============================================================================
-"""
-ESTRUCTURA DEL NPC MERCHANT:
-
-1. ESTADOS:
-   - greeting: Primera vez que encuentras al comerciante
-   - trading: Después de hacer tu primera compra
-
-2. TRANSICIONES:
-   - greeting → trading: Cuando se activa el evento "merchant_first_sale"
-
-3. EVENTOS UTILIZADOS:
-   - merchant_met: Se activa cuando hablas con el comerciante por primera vez
-   - merchant_first_sale: Se activa cuando compras algo por primera vez
-
-4. POSICIÓN:
-   - Lobby en (50, 20)
-
-5. CARACTERÍSTICAS:
-   - Tiene múltiples opciones de diálogo
-   - Permite comprar items
-   - Cambia de estado después de la primera compra
-   - Tiene diálogos cortos cuando el estado está completado
-
-EJEMPLO DE USO:
-Este NPC es un ejemplo completo que muestra:
-- Múltiples estados con transiciones
-- Diálogos complejos con múltiples opciones
-- Acciones en los diálogos (comprar items)
-- Activación de eventos desde los diálogos
-- Diálogos cortos para estados completados
-
-Para usar este NPC como plantilla:
-1. Copia este archivo
-2. Cambia "Merchant" por el nombre de tu NPC
-3. Modifica los diálogos según necesites
-4. Ajusta los estados y transiciones
-5. El sistema lo descubrirá automáticamente
-"""

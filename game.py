@@ -23,6 +23,7 @@ from .systems.text import TextContent
 from .systems.events import event_manager
 from .systems.dev_commands import dev_command_manager
 from .systems.save_manager import save_manager
+from .systems.shop import Shop, get_merchant_shop, reset_merchant_shop
 
 
 class Game:
@@ -88,9 +89,16 @@ class Game:
         # Lobby persistente (se guarda entre sesiones)
         self._lobby: Optional[Lobby] = None
         
-        # Rastreo de causa de muerte (para desbloqueos persistentes)
-        self._died_from_poison: bool = False
-        self._alchemist_was_unlocked: bool = False
+        # Tienda
+        self.current_shop: Optional[Shop] = None
+        self.shop_cursor: int = 0
+        
+        # Menú de pausa (cursor de navegación)
+        self.pause_menu_cursor: int = 0  # 0=Continuar, 1=Opciones, 2=Salir
+        
+        # Menú de opciones (centralizado)
+        self.options_menu_cursor: int = 0  # 0=Volumen, 1=Volver
+        self.options_return_state: str = GameState.PAUSED  # Estado al que volver
         
         # Configurar controles
         self._setup_controls()
@@ -169,7 +177,8 @@ class Game:
         if not self.animation_manager.has_active_animations():
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    self._save_game()
+                    if self.player and self.dungeon and self.current_save_slot:
+                        self._save_game(self.current_save_slot, silent=True)
                     self.running = False
                 elif event.type == pygame.KEYDOWN:
                     self._handle_input(event.key)
@@ -177,9 +186,8 @@ class Game:
             # Durante animaciones, solo procesar quit
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    # Guardar en slot 1 por defecto al salir
-                    if self.player and self.dungeon:
-                        self._save_game(1)
+                    if self.player and self.dungeon and self.current_save_slot:
+                        self._save_game(self.current_save_slot, silent=True)
                     self.running = False
         
         # Renderizar
@@ -194,7 +202,11 @@ class Game:
                 self.inventory_cursor,
                 self.inventory_scroll,
                 self.animation_manager,
-                self.console_input
+                self.console_input,
+                shop=self.current_shop,
+                shop_cursor=self.shop_cursor,
+                pause_cursor=self.pause_menu_cursor,
+                options_cursor=self.options_menu_cursor
             )
         
         self.renderer.tick(FPS)
@@ -222,6 +234,10 @@ class Game:
             self._handle_console_input(key)
         elif self.state == GameState.SAVE_MENU:
             self._handle_save_menu_input(key)
+        elif self.state == GameState.SHOP:
+            self._handle_shop_input(key)
+        elif self.state == GameState.OPTIONS:
+            self._handle_options_input(key)
     
     def _handle_playing_input(self, key: int) -> None:
         """Maneja la entrada durante el juego."""
@@ -260,22 +276,6 @@ class Game:
         # Pausa
         elif key == pygame.K_ESCAPE:
             self.state = GameState.PAUSED
-        
-        # Controles de música (no consumen turno)
-        elif key == pygame.K_m:
-            muted = music_manager.toggle_mute()
-            if muted:
-                self.message_log.add("♪ Música silenciada")
-            else:
-                self.message_log.add("♪ Música activada")
-        elif key == pygame.K_PLUS or key == pygame.K_KP_PLUS or key == pygame.K_EQUALS:
-            new_vol = min(1.0, music_manager.get_volume() + 0.1)
-            music_manager.set_volume(new_vol)
-            self.message_log.add(f"♪ Volumen: {int(new_vol * 100)}%")
-        elif key == pygame.K_MINUS or key == pygame.K_KP_MINUS:
-            new_vol = max(0.0, music_manager.get_volume() - 0.1)
-            music_manager.set_volume(new_vol)
-            self.message_log.add(f"♪ Volumen: {int(new_vol * 100)}%")
         
         # Si el jugador actuó, ejecutar turno de enemigos
         if player_acted:
@@ -440,55 +440,68 @@ class Game:
                 self._update_fov()
     
     def _handle_player_death(self) -> None:
-        """Maneja la muerte del jugador: fadeout agresivo y sonido de muerte."""
-        self.state = GameState.DEAD
+        """
+        Maneja la muerte del jugador.
         
-        # Rastrear causa de muerte para desbloqueos persistentes del alquimista
-        death_cause = getattr(self.player, 'death_cause', None)
-        if death_cause == "poison":
-            # Guardar si el alquimista ya estaba desbloqueado ANTES de esta muerte
-            self._alchemist_was_unlocked = event_manager.is_event_triggered("alchemist_unlocked")
-            self._died_from_poison = True
+        Enfoque: en el instante de morir se aplican TODAS las consecuencias
+        (desbloqueos, respawn lógico en lobby, auto-save). Así el save en
+        disco SIEMPRE refleja el estado post-muerte. La pantalla de muerte
+        es puramente visual; si el jugador cierra el juego en cualquier
+        momento, al reabrir estará en el lobby con el progreso correcto.
+        """
+        self.state = GameState.DEAD
         
         # Fadeout agresivo del tema de la mazmorra
         music_manager.stop_aggressive(fade_ms=200)
         
         # Reproducir sonido de muerte
         music_manager.play_sound("sound-dead.mp3", volume=0.8)
+        
+        # === Aplicar consecuencias de muerte inmediatamente ===
+        
+        # Desbloqueos por causa de muerte (ej: morir por veneno → alquimista)
+        death_cause = getattr(self.player, 'death_cause', None)
+        if death_cause == "poison":
+            alchemist_was_unlocked = event_manager.is_event_triggered("alchemist_unlocked")
+            event_manager.triggered_events.add("alchemist_unlocked")
+            if alchemist_was_unlocked:
+                event_manager.triggered_events.add("alchemist_second_poison")
+                event_manager.triggered_events.add("alchemist_greeting_done")
+        
+        # Respawn lógico en el lobby (crea jugador nuevo, preserva meta-progreso)
+        # La pantalla de muerte sigue mostrándose, pero el estado real ya es lobby
+        self._respawn_in_lobby()
+        
+        # Forzar estado DEAD de nuevo (el respawn lo cambia a PLAYING)
+        # La pantalla de muerte es solo visual; el save ya está correcto
+        self.state = GameState.DEAD
+        
+        # _start_in_lobby arrancó la música del lobby y paró los sonidos.
+        # En la pantalla de muerte no queremos música de lobby, solo el efecto.
+        music_manager.stop_all()
+        music_manager.play_sound("sound-dead.mp3", volume=0.8)
     
     def _handle_dead_input(self, key: int) -> None:
         """
         Maneja la entrada cuando el jugador está muerto.
         
-        Morir es parte del loop de progresión del roguelike:
-        el jugador vuelve al lobby con un nuevo personaje pero mantiene
-        todo su progreso meta (eventos, estados de NPCs, desbloqueos).
+        La pantalla de muerte es puramente visual. Todo el trabajo real
+        (desbloqueos, respawn, auto-save) ya se hizo en _handle_player_death.
+        Aquí solo transicionamos al estado PLAYING que ya está preparado.
         """
         if key == pygame.K_r:
-            # Detener sonido de muerte antes de reiniciar
+            # Detener sonido de muerte y transicionar al lobby (ya preparado)
             music_manager.stop_all_sounds()
             
-            # Aplicar desbloqueos por causa de muerte ANTES de reiniciar
-            # (ej: morir por veneno desbloquea al alquimista)
-            death_cause = getattr(self.player, 'death_cause', None) if self.player else None
-            if death_cause == "poison":
-                event_manager.triggered_events.add("alchemist_unlocked")
-                if getattr(self, '_alchemist_was_unlocked', False):
-                    event_manager.triggered_events.add("alchemist_second_poison")
-                    event_manager.triggered_events.add("alchemist_greeting_done")
+            # Arrancar música del lobby (no se inició antes para no sonar en la pantalla de muerte)
+            if music_manager.load_music("lobby-music.mp3"):
+                music_manager.set_volume(0.4)
+                music_manager.play(loops=-1, fade_ms=1500)
             
-            # Limpiar flags temporales de muerte
-            self._died_from_poison = False
-            self._alchemist_was_unlocked = False
-            
-            # Volver al lobby con un personaje nuevo.
-            # Se preservan: eventos, estados FSM de NPCs, slot de guardado.
-            # Se resetean: mazmorras, jugador, inventario.
-            self._respawn_in_lobby()
+            self.state = GameState.PLAYING
         elif key == pygame.K_ESCAPE:
-            # Detener todos los sonidos antes de salir
+            # Cerrar juego — el save ya está correcto (se guardó al morir)
             music_manager.stop_all()
-            # No borramos el save al salir, solo cerramos
             self.running = False
     
     def _handle_victory_input(self, key: int) -> None:
@@ -507,15 +520,64 @@ class Game:
             self.running = False
     
     def _handle_pause_input(self, key: int) -> None:
-        """Maneja la entrada en pausa."""
+        """Maneja la entrada en el menú de pausa."""
+        pause_options_count = 3  # Continuar, Opciones, Salir
+        
         if key == pygame.K_ESCAPE:
+            # ESC siempre vuelve a jugar
+            self.pause_menu_cursor = 0
             self.state = GameState.PLAYING
-        elif key == pygame.K_s:
-            # Guardar en slot 1 por defecto desde pausa
-            self._save_game(1)
-            self.running = False
-        elif key == pygame.K_q:
-            self.running = False
+        elif key == pygame.K_UP or key == pygame.K_k:
+            self.pause_menu_cursor = (self.pause_menu_cursor - 1) % pause_options_count
+            music_manager.play_sound("UI-move.mp3", volume=0.2)
+        elif key == pygame.K_DOWN or key == pygame.K_j:
+            self.pause_menu_cursor = (self.pause_menu_cursor + 1) % pause_options_count
+            music_manager.play_sound("UI-move.mp3", volume=0.2)
+        elif key == pygame.K_RETURN or key == pygame.K_KP_ENTER or key == pygame.K_SPACE:
+            music_manager.play_sound("UI-select.mp3", volume=0.3)
+            if self.pause_menu_cursor == 0:
+                # Continuar
+                self.pause_menu_cursor = 0
+                self.state = GameState.PLAYING
+            elif self.pause_menu_cursor == 1:
+                # Opciones
+                self.options_menu_cursor = 0
+                self.options_return_state = GameState.PAUSED
+                self.state = GameState.OPTIONS
+            elif self.pause_menu_cursor == 2:
+                # Salir
+                self.running = False
+    
+    def _handle_options_input(self, key: int) -> None:
+        """Maneja la entrada en el menú de opciones (centralizado)."""
+        options_count = 2  # Volumen, Volver
+        
+        if key == pygame.K_ESCAPE:
+            # Volver al menú anterior
+            self.options_menu_cursor = 0
+            self.state = self.options_return_state
+        elif key == pygame.K_UP or key == pygame.K_k:
+            self.options_menu_cursor = (self.options_menu_cursor - 1) % options_count
+            music_manager.play_sound("UI-move.mp3", volume=0.2)
+        elif key == pygame.K_DOWN or key == pygame.K_j:
+            self.options_menu_cursor = (self.options_menu_cursor + 1) % options_count
+            music_manager.play_sound("UI-move.mp3", volume=0.2)
+        elif key == pygame.K_LEFT or key == pygame.K_h:
+            if self.options_menu_cursor == 0:
+                # Bajar volumen
+                new_vol = max(0.0, music_manager.get_volume() - 0.05)
+                music_manager.set_volume(new_vol)
+        elif key == pygame.K_RIGHT or key == pygame.K_l:
+            if self.options_menu_cursor == 0:
+                # Subir volumen
+                new_vol = min(1.0, music_manager.get_volume() + 0.05)
+                music_manager.set_volume(new_vol)
+        elif key == pygame.K_RETURN or key == pygame.K_KP_ENTER or key == pygame.K_SPACE:
+            if self.options_menu_cursor == 1:
+                # Volver
+                music_manager.play_sound("UI-select.mp3", volume=0.3)
+                self.options_menu_cursor = 0
+                self.state = self.options_return_state
     
     def _handle_dialog_input(self, key: int) -> None:
         """Maneja la entrada durante diálogos/textos."""
@@ -542,6 +604,10 @@ class Game:
                         # Hay algo activo (de la cola), asegurar que el estado sea DIALOG
                         print("[DEBUG] Hay mensajes activos, manteniendo estado DIALOG")
                         self.state = GameState.DIALOG
+                    elif getattr(self.player, '_pending_shop', False):
+                        # El diálogo del comerciante señaló abrir la tienda
+                        self.player._pending_shop = False
+                        self._open_shop()
                     else:
                         # No hay más mensajes, volver al juego inmediatamente
                         print("[DEBUG] No hay mensajes, cambiando a estado PLAYING")
@@ -578,6 +644,67 @@ class Game:
                 else:
                     # No hay más mensajes, volver al juego inmediatamente
                     self.state = GameState.PLAYING
+    
+    def _open_shop(self) -> None:
+        """
+        Abre la tienda del comerciante.
+        
+        Configura el estado SHOP y carga la tienda correspondiente.
+        """
+        self.current_shop = get_merchant_shop()
+        self.shop_cursor = 0
+        self.state = GameState.SHOP
+        music_manager.play_sound("UI-select.mp3", volume=0.3)
+    
+    def _handle_shop_input(self, key: int) -> None:
+        """
+        Maneja la entrada durante la tienda.
+        
+        Controles:
+            ↑/↓: Navegar items
+            ENTER: Comprar item seleccionado
+            ESC: Cerrar tienda
+        """
+        if not self.current_shop:
+            self.state = GameState.PLAYING
+            return
+        
+        item_count = self.current_shop.get_item_count()
+        
+        if key == pygame.K_UP or key == pygame.K_k:
+            if item_count > 0:
+                self.shop_cursor = (self.shop_cursor - 1) % item_count
+                music_manager.play_sound("UI-move.mp3", volume=0.2)
+        
+        elif key == pygame.K_DOWN or key == pygame.K_j:
+            if item_count > 0:
+                self.shop_cursor = (self.shop_cursor + 1) % item_count
+                music_manager.play_sound("UI-move.mp3", volume=0.2)
+        
+        elif key == pygame.K_RETURN or key == pygame.K_KP_ENTER:
+            if item_count > 0:
+                success, message = self.current_shop.buy_item(self.player, self.shop_cursor)
+                self.message_log.add(
+                    message,
+                    "message_important" if success else "message_death"
+                )
+                if success:
+                    music_manager.play_sound("UI-select.mp3", volume=0.4)
+                    # Ajustar cursor si se eliminó un item agotado
+                    new_count = self.current_shop.get_item_count()
+                    if new_count == 0:
+                        # Tienda vacía: cerrar automáticamente
+                        self.current_shop = None
+                        self.shop_cursor = 0
+                        self.state = GameState.PLAYING
+                        return
+                    elif self.shop_cursor >= new_count:
+                        self.shop_cursor = new_count - 1
+        
+        elif key == pygame.K_ESCAPE:
+            self.current_shop = None
+            self.shop_cursor = 0
+            self.state = GameState.PLAYING
     
     def _handle_console_input(self, key: int) -> None:
         """Maneja la entrada durante el modo consola."""
@@ -718,23 +845,32 @@ class Game:
         Maneja la interacción universal con ESPACIO.
         
         Prioridad:
-        1. Hablar con NPCs/entidades adyacentes (interactive_text)
-        2. Recoger items del suelo
-        3. Usar escaleras
+        1. Abrir/cerrar puertas adyacentes (máxima prioridad)
+        2. Hablar con NPCs/entidades adyacentes (interactive_text)
+        3. Recoger items del suelo
+        4. Usar escaleras
         
         Returns:
             True si el jugador consumió un turno
         """
-        # 1. Buscar NPCs/entidades interactivas adyacentes
+        # Posiciones adyacentes (cardinales) para puertas y NPCs
         adjacent_positions = [
             (self.player.x, self.player.y - 1),  # Arriba
             (self.player.x, self.player.y + 1),  # Abajo
             (self.player.x - 1, self.player.y),  # Izquierda
             (self.player.x + 1, self.player.y),  # Derecha
-            (self.player.x, self.player.y),       # Posición actual
         ]
         
+        # 1. Buscar puertas adyacentes (prioridad máxima)
+        from .world.tile import TileType
         for x, y in adjacent_positions:
+            tile = self.dungeon.get_tile(x, y)
+            if tile and tile.tile_type == TileType.DOOR:
+                return self._toggle_door(x, y)
+        
+        # 2. Buscar NPCs/entidades interactivas adyacentes (+ posición actual)
+        interact_positions = adjacent_positions + [(self.player.x, self.player.y)]
+        for x, y in interact_positions:
             for entity in self.dungeon.entities:
                 if entity.x == x and entity.y == y:
                     if hasattr(entity, 'interactive_text') and entity.interactive_text:
@@ -748,14 +884,14 @@ class Game:
                     self._start_interaction(item.interactive_text)
                     return False
         
-        # 2. Recoger items del suelo
+        # 3. Recoger items del suelo
         items_here = self.dungeon.get_items_at(self.player.x, self.player.y)
         if items_here:
             messages = Inventory.pickup_item(self.player, self.dungeon)
             self.message_log.add_multiple(messages)
             return True
         
-        # 3. Usar escaleras
+        # 4. Usar escaleras
         pos = (self.player.x, self.player.y)
         if self.dungeon.stairs_down and self.dungeon.stairs_down == pos:
             return self._use_stairs_down()
@@ -765,6 +901,46 @@ class Game:
         # Nada con lo que interactuar
         self.message_log.add("No hay nada con lo que interactuar aquí.")
         return False
+    
+    def _toggle_door(self, x: int, y: int) -> bool:
+        """
+        Abre o cierra una puerta en la posición dada.
+        
+        No se puede toggle si hay una entidad (incluido el jugador) en el tile de la puerta.
+        
+        Args:
+            x: Coordenada X de la puerta
+            y: Coordenada Y de la puerta
+            
+        Returns:
+            True si se consumió un turno
+        """
+        tile = self.dungeon.get_tile(x, y)
+        if not tile:
+            return False
+        
+        # Verificar si hay alguna entidad en la posición de la puerta
+        blocking = self.dungeon.get_blocking_entity_at(x, y)
+        if blocking:
+            self.message_log.add("No puedes cerrar la puerta, hay algo en el camino.")
+            return False
+        
+        # Verificar si el jugador está en la puerta
+        if self.player.x == x and self.player.y == y:
+            self.message_log.add("No puedes cerrar la puerta mientras estás en ella.")
+            return False
+        
+        # Toggle
+        if tile.is_open:
+            tile.is_open = False
+            self.message_log.add("Cierras la puerta.")
+            music_manager.play_sound("door_effect.mp3", volume=0.4)
+        else:
+            tile.is_open = True
+            self.message_log.add("Abres la puerta.")
+            music_manager.play_sound("door_effect.mp3", volume=0.4)
+        
+        return True  # Consume turno
     
     def _start_interaction(self, interactive_text) -> None:
         """
@@ -876,14 +1052,21 @@ class Game:
         
         if interaction_state:
             # Marcar el estado que estaba activo al inicio como completado
+            # PERO solo si tiene completion_condition definida (o si ya se cumple).
+            # Si completion_condition=None, el estado NUNCA se completa automáticamente
+            # (ej: tienda del comerciante, que siempre muestra el diálogo completo).
+            state_cfg = npc_state_manager.get_state_config(npc_name, interaction_state)
             interaction_completion = npc_state_manager.get_state_completion(npc_name, interaction_state)
             if interaction_completion != StateCompletion.COMPLETED:
-                npc_state_manager.set_state_completion(npc_name, interaction_state, StateCompletion.COMPLETED)
+                if state_cfg and state_cfg.completion_condition is not None:
+                    npc_state_manager.set_state_completion(npc_name, interaction_state, StateCompletion.COMPLETED)
         elif current_state:
             # Fallback: si no tenemos estado guardado, usar el actual (comportamiento legacy)
+            state_cfg = npc_state_manager.get_state_config(npc_name, current_state)
             current_completion = npc_state_manager.get_state_completion(npc_name, current_state)
             if current_completion != StateCompletion.COMPLETED:
-                npc_state_manager.set_state_completion(npc_name, current_state, StateCompletion.COMPLETED)
+                if state_cfg and state_cfg.completion_condition is not None:
+                    npc_state_manager.set_state_completion(npc_name, current_state, StateCompletion.COMPLETED)
         
         # Actualizar el diálogo del NPC (solo si la entidad sigue en la zona)
         # Usar el estado ACTUAL (puede haber cambiado por la acción del diálogo)
@@ -1064,6 +1247,11 @@ class Game:
 
                 self.message_log.add("Desciendes a la mazmorra...", "message_important")
                 self._update_fov()
+                
+                # Auto-guardar al entrar a la mazmorra
+                if self.current_save_slot:
+                    self._save_game(self.current_save_slot, silent=True)
+                
                 return True
             else:
                 # No estamos en las escaleras del lobby
@@ -1132,6 +1320,11 @@ class Game:
                     
                     self.message_log.add("Has vuelto al lobby.", "message_important")
                     self._update_fov()
+                    
+                    # Auto-guardar al volver al lobby
+                    if self.current_save_slot:
+                        self._save_game(self.current_save_slot, silent=True)
+                    
                     return True
             else:
                 self._change_floor(self.player.current_floor - 1)
@@ -1175,6 +1368,10 @@ class Game:
         
         self.message_log.add(f"Entras al piso {new_floor}.", "message_important")
         self._update_fov()
+        
+        # Auto-guardar al cambiar de piso
+        if self.current_save_slot:
+            self._save_game(self.current_save_slot, silent=True)
     
     def _enemy_turn(self) -> None:
         """Ejecuta el turno de todos los enemigos."""
@@ -1292,6 +1489,13 @@ class Game:
         # Esto permite que las transiciones FSM de NPCs detecten
         # "el jugador ha completado una run desde que hablamos"
         event_manager.complete_run()
+        
+        # Restockear la tienda del comerciante para la nueva run
+        reset_merchant_shop()
+        
+        # Resetear flag DEV de forzar merchant (solo en memoria, nunca guardado)
+        from .content.npcs import merchant as _merchant_module
+        _merchant_module._dev_force_spawn = False
         
         self._start_in_lobby()
         

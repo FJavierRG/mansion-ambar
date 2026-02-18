@@ -68,6 +68,8 @@ class Monster(Entity):
         self.ai_state = "idle"  # idle, hunting, fleeing
         self.target: Optional[Player] = None
         self.last_known_player_pos: Optional[Tuple[int, int]] = None
+        self._opened_door: bool = False  # Flag para mensajes de puertas
+        self._door_to_open: Optional[Tuple[int, int]] = None  # Puerta que el monstruo está intentando abrir
     
     def update(self, player: Player, fov_map: set, animation_manager=None) -> List[str]:
         """
@@ -98,6 +100,7 @@ class Monster(Entity):
             if (self.x, self.y) == self.last_known_player_pos:
                 self.ai_state = "idle"
                 self.last_known_player_pos = None
+                self._door_to_open = None  # Olvidar puerta pendiente al perder al jugador
         
         # Ejecutar acción según estado
         if self.ai_state == "hunting" and self.target:
@@ -147,8 +150,11 @@ class Monster(Entity):
         if self.distance_to(player) < 1.5:
             messages.extend(self._attack_player(player, animation_manager))
         else:
-            # Moverse hacia el jugador
-            self._move_towards(player.x, player.y)
+            # Moverse hacia el jugador (puede abrir puertas)
+            self._opened_door = False
+            self._move_towards(player.x, player.y, can_open_doors=True)
+            if self._opened_door:
+                messages.append(f"El {self.name} abre una puerta.")
         
         return messages
     
@@ -166,16 +172,17 @@ class Monster(Entity):
         from ..systems.combat import Combat
         return Combat.attack(self, player, animation_manager)
     
-    def _move_towards(self, target_x: int, target_y: int) -> bool:
+    def _move_towards(self, target_x: int, target_y: int, can_open_doors: bool = False) -> bool:
         """
         Mueve el monstruo hacia una posición objetivo.
         
         Args:
             target_x: X objetivo
             target_y: Y objetivo
+            can_open_doors: Si puede gastar un turno abriendo puertas cerradas
             
         Returns:
-            True si se movió
+            True si se movió (o gastó turno abriendo puerta)
         """
         dx = target_x - self.x
         dy = target_y - self.y
@@ -188,41 +195,73 @@ class Monster(Entity):
         
         # Intentar moverse en diagonal primero
         if dx != 0 and dy != 0:
-            if self._try_move(dx, dy):
+            if self._try_move(dx, dy, can_open_doors):
                 return True
         
         # Intentar moverse en una dirección
         if dx != 0:
-            if self._try_move(dx, 0):
+            if self._try_move(dx, 0, can_open_doors):
                 return True
         if dy != 0:
-            if self._try_move(0, dy):
+            if self._try_move(0, dy, can_open_doors):
                 return True
         
         # Intentar la otra dirección diagonal
         if dx != 0 and dy != 0:
-            if self._try_move(dx, 0):
+            if self._try_move(dx, 0, can_open_doors):
                 return True
-            if self._try_move(0, dy):
+            if self._try_move(0, dy, can_open_doors):
                 return True
         
         return False
     
-    def _try_move(self, dx: int, dy: int) -> bool:
+    def _try_move(self, dx: int, dy: int, can_open_doors: bool = False) -> bool:
         """
         Intenta moverse en una dirección.
+        
+        Si can_open_doors es True y el tile destino es una puerta cerrada:
+        - 1er turno: camino bloqueado, el monstruo pierde el turno.
+        - 2º turno: el monstruo abre la puerta (sin moverse).
+        - 3er turno: la puerta ya está abierta, el monstruo camina.
         
         Args:
             dx: Desplazamiento X
             dy: Desplazamiento Y
+            can_open_doors: Si puede abrir puertas cerradas
             
         Returns:
-            True si el movimiento fue exitoso
+            True si el movimiento fue exitoso (o se consumió turno con puerta)
         """
+        from ..world.tile import TileType
+        
         new_x = self.x + dx
         new_y = self.y + dy
         
         if self.dungeon:
+            tile = self.dungeon.get_tile(new_x, new_y)
+            
+            # Puerta cerrada: sistema de 2 turnos
+            if (can_open_doors and tile and 
+                    tile.tile_type == TileType.DOOR and not tile.is_open):
+                door_pos = (new_x, new_y)
+                if self._door_to_open != door_pos:
+                    # 1er encuentro: camino bloqueado, pierde turno
+                    self._door_to_open = door_pos
+                    return True  # Turno consumido (bloqueado)
+                else:
+                    # 2º encuentro: abre la puerta, pierde turno
+                    tile.is_open = True
+                    self._door_to_open = None
+                    self._opened_door = True
+                    from ..systems.music import music_manager
+                    music_manager.play_sound("door_effect.mp3", volume=0.4)
+                    return True  # Turno consumido (abriendo)
+            
+            # Si llegamos aquí y teníamos una puerta pendiente que ya no
+            # está cerrada (otra entidad la abrió), limpiar estado
+            if self._door_to_open and (new_x, new_y) != self._door_to_open:
+                self._door_to_open = None
+            
             # Verificar que sea caminable y no haya otra entidad
             if self.dungeon.is_walkable(new_x, new_y):
                 # Verificar que no haya otro monstruo
@@ -268,7 +307,7 @@ class Monster(Entity):
         Returns:
             Diccionario con los datos
         """
-        return {
+        data = {
             "x": self.x,
             "y": self.y,
             "monster_type": self.monster_type,
@@ -276,6 +315,9 @@ class Monster(Entity):
             "ai_state": self.ai_state,
             "is_dead": self.fighter.is_dead,
         }
+        if self._door_to_open:
+            data["door_to_open"] = list(self._door_to_open)
+        return data
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any], dungeon: Optional[Dungeon] = None) -> Monster:
@@ -297,6 +339,8 @@ class Monster(Entity):
         )
         monster.fighter.hp = data["hp"]
         monster.ai_state = data["ai_state"]
+        if "door_to_open" in data:
+            monster._door_to_open = tuple(data["door_to_open"])
         
         if data.get("is_dead", False):
             monster.char = "%"

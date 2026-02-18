@@ -357,9 +357,35 @@ class NPCStateManager:
         
         return npc
     
+    @staticmethod
+    def _is_near_stairs(zone: Zone, x: int, y: int, radius: int = 1) -> bool:
+        """
+        Verifica si una posición está sobre o adyacente a unas escaleras.
+        
+        Args:
+            zone: Zona a verificar
+            x: Coordenada X
+            y: Coordenada Y
+            radius: Radio de distancia a considerar (1 = adyacente)
+            
+        Returns:
+            True si la posición está cerca de escaleras
+        """
+        stairs_positions = []
+        if hasattr(zone, 'stairs_down') and zone.stairs_down:
+            stairs_positions.append(zone.stairs_down)
+        if hasattr(zone, 'stairs_up') and zone.stairs_up:
+            stairs_positions.append(zone.stairs_up)
+        
+        for sx, sy in stairs_positions:
+            if abs(x - sx) <= radius and abs(y - sy) <= radius:
+                return True
+        return False
+    
     def _get_random_spawn_position(self, zone: Zone, state_config: NPCStateConfig) -> Optional[Tuple[int, int]]:  # noqa: ARG002
         """
         Obtiene una posición aleatoria válida para spawnear un NPC en una zona.
+        Evita posiciones sobre o adyacentes a escaleras.
         
         Args:
             zone: Zona donde spawnear
@@ -378,21 +404,27 @@ class NPCStateManager:
             else:
                 spawn_room = zone.rooms[0]
             
-            # Obtener posición aleatoria en la habitación
-            if hasattr(zone, '_get_random_room_position'):
-                return zone._get_random_room_position(spawn_room)
-            else:
-                # Fallback: posición aleatoria en la habitación
-                room = spawn_room
-                x = random.randint(room.x1 + 1, room.x2 - 1)
-                y = random.randint(room.y1 + 1, room.y2 - 1)
-                return (x, y)
+            # Intentar varias veces para evitar escaleras
+            for _ in range(20):
+                if hasattr(zone, '_get_random_room_position'):
+                    pos = zone._get_random_room_position(spawn_room)
+                else:
+                    room = spawn_room
+                    px = random.randint(room.x1 + 1, room.x2 - 1)
+                    py = random.randint(room.y1 + 1, room.y2 - 1)
+                    pos = (px, py)
+                
+                if not self._is_near_stairs(zone, pos[0], pos[1]):
+                    return pos
+            
+            # Si no encuentra posición válida tras 20 intentos, devolver la última
+            return pos  # type: ignore[possibly-undefined]
         
-        # Para lobby u otras zonas: buscar posiciones walkable
+        # Para lobby u otras zonas: buscar posiciones walkable lejos de escaleras
         walkable_positions = []
         for tx in range(zone.width):
             for ty in range(zone.height):
-                if zone.is_walkable(tx, ty):
+                if zone.is_walkable(tx, ty) and not self._is_near_stairs(zone, tx, ty):
                     walkable_positions.append((tx, ty))
         
         if not walkable_positions:
@@ -451,14 +483,19 @@ class NPCStateManager:
                 if not pos:
                     continue
             
-            # 4. Verificar que no haya nada bloqueando
-            if zone.get_blocking_entity_at(pos[0], pos[1]):
+            # 4. Verificar que no haya nada bloqueando ni escaleras adyacentes
+            needs_reposition = (
+                zone.get_blocking_entity_at(pos[0], pos[1]) or
+                self._is_near_stairs(zone, pos[0], pos[1])
+            )
+            if needs_reposition:
                 found_position = False
                 for dx in range(-2, 3):
                     for dy in range(-2, 3):
                         test_x, test_y = pos[0] + dx, pos[1] + dy
                         if (zone.is_walkable(test_x, test_y) and 
-                            not zone.get_blocking_entity_at(test_x, test_y)):
+                            not zone.get_blocking_entity_at(test_x, test_y) and
+                            not self._is_near_stairs(zone, test_x, test_y)):
                             pos = (test_x, test_y)
                             found_position = True
                             break
