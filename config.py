@@ -9,7 +9,7 @@ from typing import Dict, Tuple
 # ============================================================================
 WINDOW_WIDTH: int = 1280
 WINDOW_HEIGHT: int = 800
-GAME_TITLE: str = "Roguelike - En Busca del Amuleto de Yendor"
+GAME_TITLE: str = "La Mansión de Ámbar"
 FPS: int = 60
 
 # ============================================================================
@@ -39,23 +39,58 @@ MESSAGE_LOG_MAX_MESSAGES: int = 100
 # ============================================================================
 ROOM_MIN_SIZE: int = 6
 ROOM_MAX_SIZE: int = 12
-MAX_ROOMS: int = 15
+MAX_ROOMS: int = 15  # Tope absoluto (fallback de seguridad)
 MAX_ROOM_MONSTERS: int = 4
 MAX_DUNGEON_LEVEL: int = 10
 
-# --- Spawn de items por planta (dos pools independientes) ---
-# Pool 1: Items de combate (pociones, armas, armaduras)
-#   total = max(MIN, BASE + randint(0, VARIANCE) - (floor-1)//FLOOR_DIV)
-FLOOR_COMBAT_ITEMS_BASE: int = 2
-FLOOR_COMBAT_ITEMS_VARIANCE: int = 2     # +randint(0, N) → rango 2-4
-FLOOR_COMBAT_ITEMS_MIN: int = 1
-FLOOR_COMBAT_ITEMS_FLOOR_DIV: int = 3    # penalización cada N pisos
+# --- Progresión del número de salas por planta (min, max) ---
+# Controla cuántas salas genera cada piso para una dificultad progresiva.
+# Las plantas no listadas usan FLOOR_ROOM_COUNT_DEFAULT.
+# Fácilmente editable para testeo y balance.
+FLOOR_ROOM_COUNT: Dict[int, Tuple[int, int]] = {
+    1: (4, 5),   # Introducción suave: pocas salas
+    2: (5, 6),   # Ligera expansión
+    3: (6, 7),   # El jugador ya conoce las mecánicas
+    4: (7, 8),   # Dificultad media
+    5: (7, 8),
+    6: (7, 8),
+}
+FLOOR_ROOM_COUNT_DEFAULT: Tuple[int, int] = (8, 9)  # Planta 7 en adelante
 
-# Pool 2: Monedas de oro (independiente, solo activo en Fase 3)
-FLOOR_GOLD_BASE: int = 2
-FLOOR_GOLD_VARIANCE: int = 2             # +randint(0, N) → rango 2-4
-FLOOR_GOLD_MIN: int = 1
-FLOOR_GOLD_FLOOR_DIV: int = 4            # penalización más suave que combate
+# --- Progresión de ítems de combate por planta (min, max) ---
+# Pool de combate: pociones, armas, armaduras.
+# Filosofía roguelike: pocos ítems, cada uno es una decisión importante.
+# Las plantas no listadas usan FLOOR_COMBAT_ITEMS_DEFAULT.
+FLOOR_COMBAT_ITEMS: Dict[int, Tuple[int, int]] = {
+    1:  (1, 1),   # Un solo ítem — cada hallazgo cuenta
+    2:  (2, 2),   # Ligera mejora
+    3:  (3, 3),   # El jugador ya gestiona recursos
+    4:  (3, 4),   # Dificultad media, algo más de variedad
+    5:  (3, 4),
+    6:  (3, 4),
+    7:  (4, 5),   # Plantas altas: más salas, algo más de loot
+    8:  (4, 5),
+    9:  (4, 5),
+    10: (3, 3),   # Planta del boss: reto de recursos, no de loot fresco
+}
+FLOOR_COMBAT_ITEMS_DEFAULT: Tuple[int, int] = (4, 5)
+
+# --- Progresión de oro por planta (min, max) ---
+# Pool separado: el oro sobrevive entre runs (recurso meta-progresión).
+# Las plantas no listadas usan FLOOR_GOLD_ITEMS_DEFAULT.
+FLOOR_GOLD_ITEMS: Dict[int, Tuple[int, int]] = {
+    1:  (1, 1),
+    2:  (1, 2),
+    3:  (1, 2),
+    4:  (2, 2),
+    5:  (2, 2),
+    6:  (2, 2),
+    7:  (2, 3),
+    8:  (2, 3),
+    9:  (2, 3),
+    10: (2, 2),
+}
+FLOOR_GOLD_ITEMS_DEFAULT: Tuple[int, int] = (2, 3)
 
 # Probabilidad de que una habitación tenga puertas en todas sus entradas
 DOOR_CHANCE: float = 0.3
@@ -332,14 +367,14 @@ POTION_DATA: Dict[str, Dict] = {
         "effect": "heal",
         "value": 20,
         "color": "potion",
-        "rarity": 1.0,
+        "rarity": 0.5,
     },
     "greater_health_potion": {
         "name": "Poción de Vida Mayor",
         "effect": "heal",
         "value": 50,
         "color": "potion",
-        "rarity": 0.5,
+        "rarity": 0.05,
     },
     "strength_potion": {
         "name": "Poción de Fuerza",
@@ -347,52 +382,116 @@ POTION_DATA: Dict[str, Dict] = {
         "value": 3,
         "duration": 20,
         "color": "potion",
-        "rarity": 0.4,
+        "rarity": 0.1,
     },
     "poison_potion": {
         "name": "Poción de Veneno",
         "effect": "poison",
-        "value": -15,
+        "value": -25,
         "color": "potion",
-        "rarity": 0.3,
+        "rarity": 0.25,
     },
 }
 
 WEAPON_DATA: Dict[str, Dict] = {
+    "bronze_dagger": {
+        "name": "Daga de bronce",
+        "attack_bonus": 1,
+        "durability": 5,
+        "sprite": "dagger",
+        "color": "weapon",
+        "rarity": 1.0,
+        "min_level": 2,
+    },
     "dagger": {
         "name": "Daga",
         "attack_bonus": 2,
+        "durability": 5,
+        "sprite": "dagger",
         "color": "weapon",
         "rarity": 1.0,
-        "min_level": 1,
-    },
-    "short_sword": {
-        "name": "Espada Corta",
-        "attack_bonus": 4,
-        "color": "weapon",
-        "rarity": 0.8,
         "min_level": 2,
     },
-    "long_sword": {
-        "name": "Espada Larga",
-        "attack_bonus": 6,
-        "color": "weapon",
-        "rarity": 0.6,
-        "min_level": 4,
-    },
-    "axe": {
-        "name": "Hacha de Guerra",
-        "attack_bonus": 8,
-        "color": "weapon",
-        "rarity": 0.4,
-        "min_level": 6,
-    },
-    "great_sword": {
-        "name": "Espadón",
+    "holy_dagger": {
+        "name": "Daga Sagrada",
         "attack_bonus": 12,
+        "durability": 10,
+        "sprite": "dagger",
         "color": "weapon",
         "rarity": 0.2,
-        "min_level": 8,
+        "min_level": 2,
+    },
+    "short_sword": {
+        "name": "Espada corta",
+        "attack_bonus": 3,
+        "durability": 8,
+        "sprite": "sword",
+        "color": "weapon",
+        "rarity": 0.8,
+        "min_level": 3,
+    },
+    "bronze_hammer": {
+        "name": "Martillo de bronce",
+        "attack_bonus": 4,
+        "durability": 6,
+        "sprite": "axe",
+        "color": "weapon",
+        "rarity": 0.8,
+        "min_level": 3,
+    },
+    "hammer": {
+        "name": "Martillo",
+        "attack_bonus": 4,
+        "durability": 8,
+        "sprite": "axe",
+        "color": "weapon",
+        "rarity": 0.8,
+        "min_level": 3,
+    },
+    "long_sword": {
+        "name": "Espada larga",
+        "attack_bonus": 5,
+        "durability": 10,
+        "sprite": "sword",
+        "color": "weapon",
+        "rarity": 0.5,
+        "min_level": 4,
+    },
+    "war_axe": {
+        "name": "Hacha de guerra",
+        "attack_bonus": 10,
+        "durability": 8,
+        "sprite": "axe",
+        "color": "weapon",
+        "rarity": 0.5,
+        "min_level": 4,
+    },
+    "lance": {
+        "name": "Lanza",
+        "attack_bonus": 15,
+        "durability": 4,
+        "sprite": "spear",
+        "color": "weapon",
+        "rarity": 0.3,
+        "min_level": 4,
+    },
+    "dragon_lance": {
+        "name": "Lanza Dragontina",
+        "attack_bonus": 20,
+        "durability": 4,
+        "sprite": "spear",
+        "color": "weapon",
+        "rarity": 0.2,
+        "min_level": 4,
+    },
+    "commander_sword": {
+        "name": "Espada de comandante",
+        "attack_bonus": 10,
+        "durability": 10,
+        "sprite": "sword",
+        "color": "weapon",
+        "rarity": 0.5,
+        "min_level": 4,
     },
 }
 
@@ -400,6 +499,7 @@ ARMOR_DATA: Dict[str, Dict] = {
     "leather_armor": {
         "name": "Armadura de Cuero",
         "defense_bonus": 2,
+        "durability": 6,
         "color": "armor",
         "rarity": 1.0,
         "min_level": 1,
@@ -407,6 +507,7 @@ ARMOR_DATA: Dict[str, Dict] = {
     "chain_mail": {
         "name": "Cota de Mallas",
         "defense_bonus": 4,
+        "durability": 10,
         "color": "armor",
         "rarity": 0.6,
         "min_level": 3,
@@ -414,6 +515,7 @@ ARMOR_DATA: Dict[str, Dict] = {
     "plate_armor": {
         "name": "Armadura de Placas",
         "defense_bonus": 7,
+        "durability": 16,
         "color": "armor",
         "rarity": 0.3,
         "min_level": 6,
@@ -421,6 +523,7 @@ ARMOR_DATA: Dict[str, Dict] = {
     "dragon_armor": {
         "name": "Armadura de Dragón",
         "defense_bonus": 12,
+        "durability": 25,
         "color": "armor",
         "rarity": 0.1,
         "min_level": 9,

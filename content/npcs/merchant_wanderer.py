@@ -38,15 +38,6 @@ RESTOCK_COST: int = 15
 # CONDICIONES DE DIÁLOGO
 # ============================================================================
 
-def _can_restock(player) -> bool:
-    """
-    Condición: puede pagar el restock y no lo ha pagado ya esta run.
-    """
-    from roguelike.systems.events import event_manager
-    already_paid = event_manager.get_data("merchant_restock_paid", False)
-    return player.gold >= RESTOCK_COST and not already_paid
-
-
 def _can_donate(player) -> bool:
     """
     Condición: tiene al menos 1 oro para donar.
@@ -96,23 +87,41 @@ def create_wanderer_greeting_dialog() -> DialogTree:
       - Donar oro para mejorar mercancía (abre selector numérico)
       - Despedirse
     """
+    from roguelike.systems.events import event_manager
+    
     tree = DialogTree(start_node="welcome")
+    already_restocked = event_manager.get_data("merchant_restock_paid", False)
 
-    options = [
-        DialogOption(
+    options = []
+    
+    # Opción de restock: siempre visible si no se ha pagado esta run.
+    # Si no tiene oro suficiente, la acción redirige al nodo de rechazo.
+    if not already_restocked:
+        restock_option = DialogOption(
             f"Ofrecer algo de ayuda: ({RESTOCK_COST} oro)",
             next_node="thanks_restock",
-            condition=_can_restock,
-            action=_restock_action,
-        ),
-        DialogOption(
-            "Aportar dinero para mejorar el negocio del mercader",
-            next_node=None,
-            condition=_can_donate,
-            action=_open_donation_action,
-        ),
-        DialogOption("No, gracias", next_node=None),
-    ]
+            action=None,  # Se asigna abajo via closure
+        )
+
+        def _try_restock(player, zone, _opt=restock_option):
+            """Intenta el restock: si hay oro suficiente cobra y reabastece,
+            si no redirige al nodo de 'no tienes suficiente'."""
+            if player.gold >= RESTOCK_COST:
+                _restock_action(player, zone)
+                _opt.next_node = "thanks_restock"
+            else:
+                _opt.next_node = "not_enough_gold"
+
+        restock_option.action = _try_restock
+        options.append(restock_option)
+    
+    options.append(DialogOption(
+        "Aportar dinero para mejorar el negocio del mercader",
+        next_node=None,
+        condition=_can_donate,
+        action=_open_donation_action,
+    ))
+    options.append(DialogOption("No, gracias", next_node=None))
 
     welcome_node = DialogNode(
         node_id="welcome",
@@ -133,6 +142,15 @@ def create_wanderer_greeting_dialog() -> DialogTree:
         options=[DialogOption("Continuar", next_node=None)],
     )
     tree.add_node(thanks_restock_node)
+
+    # Rechazo por falta de oro
+    not_enough_node = DialogNode(
+        node_id="not_enough_gold",
+        speaker="Comerciante Errante",
+        text="Parece que no tienes suficiente.",
+        options=[DialogOption("Continuar", next_node=None)],
+    )
+    tree.add_node(not_enough_node)
 
     return tree
 

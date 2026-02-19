@@ -4,7 +4,7 @@ Carga y maneja sprites PNG para criaturas e items.
 """
 from __future__ import annotations
 import os
-from typing import Dict, Optional, Tuple
+from typing import Dict, Generator, Optional, Tuple
 import pygame
 
 from ..config import TILE_SIZE
@@ -42,6 +42,11 @@ class SpriteManager:
         "comerciante errante": "merchant_wanderer.png",  # Comerciante Errante (lobby)
     }
     
+    # Sprites de decoración del suelo (sangre, etc.)
+    DECORATION_SPRITES: Dict[str, str] = {
+        "blood": "blood.png",
+    }
+    
     # Sprites que NO deben escalarse a TILE_SIZE (mantienen su tamaño original)
     NO_SCALE_CREATURES: set = {
         "comerciante",
@@ -58,12 +63,18 @@ class SpriteManager:
     # Mapeo de tipos de item a nombres de archivo
     ITEM_SPRITES: Dict[str, str] = {
         "potion": "pocion.png",
+        "poison_potion": "pocion_veneno.png",
         "scroll": "pergamino.png",
-        "weapon": "arma.png",
+        "weapon": "arma.png",       # Fallback genérico para armas sin sprite
         "armor": "armadura.png",
         "gold": "oro.png",
         "amulet": "amuleto.png",
-        "ring": "anilo.png",  # El archivo tiene este nombre
+        "ring": "anilo.png",        # El archivo tiene este nombre
+        # Sprites específicos por tipo de arma
+        "dagger": "dagger.png",
+        "sword": "sword.png",
+        "axe": "axe.png",           # También cubre martillos
+        "spear": "spear.png",
     }
     
     def __init__(self) -> None:
@@ -71,6 +82,7 @@ class SpriteManager:
         self._creature_cache: Dict[str, pygame.Surface] = {}
         self._item_cache: Dict[str, pygame.Surface] = {}
         self._terrain_cache: Dict[str, pygame.Surface] = {}
+        self._decoration_cache: Dict[str, pygame.Surface] = {}
         self._loaded = False
         
         # Ruta base a los sprites
@@ -82,33 +94,62 @@ class SpriteManager:
         self._items_path = os.path.join(self._base_path, "objetos")
     
     def load_sprites(self) -> None:
-        """Carga todos los sprites en memoria."""
+        """Carga todos los sprites en memoria (sin feedback de progreso)."""
+        if self._loaded:
+            return
+        # Consumir el generador de carga completo
+        for _ in self.load_sprites_iter():
+            pass
+    
+    def load_sprites_iter(self) -> Generator[Tuple[int, int, str], None, None]:
+        """
+        Carga todos los sprites emitiendo progreso.
+        
+        Yields:
+            (loaded, total, asset_name) — cantidad cargada, total, nombre del asset actual
+        """
         if self._loaded:
             return
         
-        # Cargar sprites de criaturas
+        # Calcular total de assets
+        all_assets: list[Tuple[str, str, str, bool]] = []  # (category, key, filename, scale)
+        
         for creature_type, filename in self.CREATURE_SPRITES.items():
             scale = creature_type not in self.NO_SCALE_CREATURES
-            sprite = self._load_sprite(self._creatures_path, filename, scale=scale)
-            if sprite:
-                self._creature_cache[creature_type] = sprite
+            all_assets.append(("creature", creature_type, filename, scale))
         
-        # Cargar sprites de items
         for item_type, filename in self.ITEM_SPRITES.items():
-            sprite = self._load_sprite(self._items_path, filename)
-            if sprite:
-                self._item_cache[item_type] = sprite
+            all_assets.append(("item", item_type, filename, True))
         
-        # Cargar sprites de terreno (escaleras están en carpeta criaturas)
         for terrain_type, filename in self.TERRAIN_SPRITES.items():
-            sprite = self._load_sprite(self._creatures_path, filename)
+            all_assets.append(("terrain", terrain_type, filename, True))
+        
+        for deco_type, filename in self.DECORATION_SPRITES.items():
+            all_assets.append(("decoration", deco_type, filename, True))
+        
+        total = len(all_assets)
+        
+        for i, (category, key, filename, scale) in enumerate(all_assets):
+            folder = self._creatures_path if category in ("creature", "terrain", "decoration") else self._items_path
+            sprite = self._load_sprite(folder, filename, scale=scale)
+            
             if sprite:
-                self._terrain_cache[terrain_type] = sprite
+                if category == "creature":
+                    self._creature_cache[key] = sprite
+                elif category == "item":
+                    self._item_cache[key] = sprite
+                elif category == "decoration":
+                    self._decoration_cache[key] = sprite
+                else:
+                    self._terrain_cache[key] = sprite
+            
+            yield (i + 1, total, key)
         
         self._loaded = True
         print(f"[SpriteManager] Cargados {len(self._creature_cache)} sprites de criaturas")
         print(f"[SpriteManager] Cargados {len(self._item_cache)} sprites de items")
         print(f"[SpriteManager] Cargados {len(self._terrain_cache)} sprites de terreno")
+        print(f"[SpriteManager] Cargados {len(self._decoration_cache)} sprites de decoración")
     
     def _load_sprite(self, folder: str, filename: str, scale: bool = True) -> Optional[pygame.Surface]:
         """
@@ -200,6 +241,20 @@ class SpriteManager:
         if not self._loaded:
             self.load_sprites()
         return terrain_type in self._terrain_cache
+    
+    def get_decoration_sprite(self, deco_type: str) -> Optional[pygame.Surface]:
+        """
+        Obtiene el sprite de una decoración de suelo.
+        
+        Args:
+            deco_type: Tipo de decoración (ej: "blood")
+            
+        Returns:
+            Surface del sprite o None si no existe
+        """
+        if not self._loaded:
+            self.load_sprites()
+        return self._decoration_cache.get(deco_type)
 
 
 # Instancia global del gestor de sprites

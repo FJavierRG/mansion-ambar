@@ -1,5 +1,5 @@
 """
-Items especiales: Amuleto de Yendor y Oro.
+Items especiales: Amuleto de Ámbar y Oro.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING, Dict, Any, List, Tuple
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 class Amulet(Item):
     """
-    El Amuleto de Yendor - Objetivo del juego.
+    El Amuleto de Ámbar - Objetivo del juego.
     """
     
     def __init__(self, x: int = 0, y: int = 0) -> None:
@@ -28,7 +28,7 @@ class Amulet(Item):
             x=x,
             y=y,
             char=SYMBOLS["amulet"],
-            name="Amuleto de Yendor",
+            name="Amuleto de Ámbar",
             color="amulet",
             item_type="amulet",
             identified=True,
@@ -38,7 +38,7 @@ class Amulet(Item):
     
     def get_description(self) -> str:
         """Retorna la descripción del amuleto."""
-        return "El legendario Amuleto de Yendor. ¡Escapa con él!"
+        return "El legendario Amuleto de Ámbar. ¡Escapa con él!"
     
     def to_dict(self) -> Dict[str, Any]:
         """Serializa el amuleto."""

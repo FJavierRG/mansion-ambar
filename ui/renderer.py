@@ -9,7 +9,7 @@ import pygame
 from ..config import (
     WINDOW_WIDTH, WINDOW_HEIGHT, TILE_SIZE, FONT_NAME, FONT_SIZE,
     COLORS, MAP_WIDTH, MAP_HEIGHT, MESSAGE_LOG_HEIGHT,
-    GameState
+    FPS, GameState
 )
 from .hud import HUD
 from .message_log import MessageLog
@@ -35,7 +35,7 @@ class Renderer:
     def __init__(self) -> None:
         """Inicializa el renderizador."""
         pygame.init()
-        pygame.display.set_caption("Roguelike - En Busca del Amuleto de Yendor")
+        pygame.display.set_caption("La Mansión de Ámbar")
         
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         self.clock = pygame.time.Clock()
@@ -69,9 +69,6 @@ class Renderer:
         
         # Referencia al animation manager (se actualiza en cada render)
         self._current_animation_manager: Optional[Any] = None
-        
-        # Cargar sprites
-        sprite_manager.load_sprites()
     
     def render(
         self,
@@ -121,6 +118,9 @@ class Renderer:
         # Renderizar items
         self._render_items(dungeon, visible_tiles)
         
+        # Renderizar decoraciones de suelo (sangre, etc.)
+        self._render_decorations(dungeon, visible_tiles)
+        
         # Renderizar entidades
         self._render_entities(dungeon, visible_tiles)
         
@@ -136,6 +136,9 @@ class Renderer:
         
         # Renderizar HUD
         self.hud.render(self.screen, player)
+        
+        # Renderizar indicador de piso (esquina superior derecha)
+        self.hud.render_floor_indicator(self.screen, player)
         
         # Renderizar log de mensajes
         self._render_message_log(message_log)
@@ -211,14 +214,29 @@ class Renderer:
         """Renderiza los items en el suelo."""
         for item in dungeon.items:
             if (item.x, item.y) in visible_tiles:
-                # Intentar usar sprite primero
-                sprite = sprite_manager.get_item_sprite(item.item_type)
+                # Intentar sprite específico del item (ej: "dagger", "sword")
+                sprite = None
+                if getattr(item, 'sprite', None):
+                    sprite = sprite_manager.get_item_sprite(item.sprite)
+                # Fallback a sprite genérico por tipo (ej: "weapon", "armor")
+                if not sprite:
+                    sprite = sprite_manager.get_item_sprite(item.item_type)
                 if sprite:
                     self._draw_sprite(item.x, item.y, sprite)
                 else:
                     # Fallback a ASCII
                     color = COLORS.get(item.color, COLORS["white"])
                     self._draw_char(item.x, item.y, item.char, color)
+    
+    def _render_decorations(self, dungeon: Dungeon, visible_tiles: Set[Tuple[int, int]]) -> None:
+        """Renderiza las decoraciones del suelo (sangre, etc.)."""
+        for (x, y), (deco_type, angle) in dungeon.decorations.items():
+            if (x, y) in visible_tiles:
+                sprite = sprite_manager.get_decoration_sprite(deco_type)
+                if sprite:
+                    if angle != 0:
+                        sprite = pygame.transform.rotate(sprite, angle)
+                    self._draw_sprite(x, y, sprite)
     
     def _render_entities(self, dungeon: Dungeon, visible_tiles: Set[Tuple[int, int]]) -> None:
         """Renderiza las entidades (monstruos)."""
@@ -746,7 +764,7 @@ class Renderer:
         )
         
         # Subtexto
-        sub_text = "¡Has escapado con el Amuleto de Yendor!"
+        sub_text = "¡Has escapado con el Amuleto de Ámbar!"
         sub_surface = self.font.render(sub_text, True, COLORS["amulet"])
         self.screen.blit(
             sub_surface,
@@ -1150,7 +1168,7 @@ class Renderer:
                         )
 
     def _render_damage_numbers(self) -> None:
-        """Renderiza los números de daño flotantes."""
+        """Renderiza los números de daño flotantes y textos flotantes."""
         if not self._current_animation_manager:
             return
         
@@ -1170,25 +1188,45 @@ class Renderer:
             pixel_x = int(x * TILE_SIZE)
             pixel_y = int(y * TILE_SIZE)
             
-            # Texto del daño
-            damage_text = f"-{damage_num.damage}"
-            
-            # Color según quién ataca y si es crítico
-            if damage_num.is_player_attack:
-                # Daño del jugador: blanco (o amarillo si es crítico)
-                if damage_num.is_critical:
-                    color = COLORS["message_important"]  # Amarillo para críticos del jugador
-                else:
-                    color = COLORS["white"]  # Blanco para daño normal del jugador
+            # Determinar texto y color
+            if damage_num.text is not None:
+                # Texto flotante personalizado
+                display_text = damage_num.text
+                color = COLORS["weapon"]  # Gris plateado para armas
             else:
-                # Daño recibido por el jugador: rojo
-                if damage_num.is_critical:
-                    color = COLORS["message_death"]  # Rojo brillante para críticos
+                # Número de daño estándar
+                display_text = f"-{damage_num.damage}"
+                
+                # Color según quién ataca y si es crítico
+                if damage_num.is_player_attack:
+                    if damage_num.is_critical:
+                        color = COLORS["message_important"]
+                    else:
+                        color = COLORS["white"]
                 else:
-                    color = COLORS["message_damage"]  # Rojo normal
+                    if damage_num.is_critical:
+                        color = COLORS["message_death"]
+                    else:
+                        color = COLORS["message_damage"]
+            
+            # Usar fuente ligeramente más grande para textos de rotura
+            if damage_num.text is not None:
+                try:
+                    render_font = pygame.font.SysFont(FONT_NAME, damage_font_size + 1, bold=True)
+                except:
+                    render_font = pygame.font.Font(None, damage_font_size + 1)
+            else:
+                render_font = damage_font
             
             # Crear superficie con el texto y aplicar alpha
-            text_surface = damage_font.render(damage_text, True, color)
+            text_surface = render_font.render(display_text, True, color)
+            
+            # Dibujar línea de tachado si el estilo lo requiere
+            if damage_num.text_style == "strikethrough":
+                text_w = text_surface.get_width()
+                text_h = text_surface.get_height()
+                line_y = text_h // 2
+                pygame.draw.line(text_surface, color, (0, line_y), (text_w, line_y), 1)
             
             # Aplicar transparencia según alpha
             if damage_num.alpha < 255:
@@ -1202,6 +1240,104 @@ class Renderer:
             
             self.screen.blit(text_surface, (centered_x, centered_y))
     
+    def show_splash_and_load(self) -> None:
+        """
+        Muestra una pantalla de carga mientras carga los assets del juego.
+        
+        Flujo:
+        1. Carga sprites mostrando barra de progreso
+        2. Espera a que el jugador pulse una tecla
+        """
+        # Dimensiones de la barra de progreso
+        bar_width = 360
+        bar_height = 12
+        bar_x = (WINDOW_WIDTH - bar_width) // 2
+        bar_y = WINDOW_HEIGHT // 2
+        
+        # ---- Fase de carga: iterar sobre sprites con progreso ----
+        for loaded, total, asset_name in sprite_manager.load_sprites_iter():
+            # Procesar eventos para que la ventana no se congele
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    raise SystemExit
+            
+            progress = loaded / total if total > 0 else 1.0
+            self._draw_loading_frame(
+                bar_x, bar_y, bar_width, bar_height,
+                progress, f"Cargando: {asset_name}..."
+            )
+        
+        # ---- Fase de espera: mostrar "Pulsa cualquier tecla" ----
+        self._draw_loading_frame(
+            bar_x, bar_y, bar_width, bar_height,
+            1.0, "¡Carga completa!"
+        )
+        pygame.time.wait(300)
+        
+        # Animación de parpadeo para "Pulsa cualquier tecla"
+        waiting = True
+        blink_timer = 0
+        blink_visible = True
+        
+        while waiting:
+            dt = self.clock.tick(FPS)
+            blink_timer += dt
+            if blink_timer >= 500:
+                blink_visible = not blink_visible
+                blink_timer = 0
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    raise SystemExit
+                elif event.type == pygame.KEYDOWN:
+                    waiting = False
+            
+            self._draw_loading_frame(
+                bar_x, bar_y, bar_width, bar_height,
+                1.0, None,
+                show_prompt=blink_visible
+            )
+    
+    def _draw_loading_frame(
+        self,
+        bar_x: int, bar_y: int,
+        bar_width: int, bar_height: int,
+        progress: float,
+        status_text: Optional[str],
+        show_prompt: bool = False,
+    ) -> None:
+        """Dibuja un frame de la pantalla de carga (fondo negro, barra blanca)."""
+        self.screen.fill(COLORS["black"])
+        
+        cx = WINDOW_WIDTH // 2
+        
+        # --- Barra de progreso (centrada en pantalla) ---
+        # Fondo
+        pygame.draw.rect(self.screen, COLORS["darker_gray"],
+                         (bar_x, bar_y, bar_width, bar_height), border_radius=3)
+        # Relleno
+        fill_w = int(bar_width * progress)
+        if fill_w > 0:
+            pygame.draw.rect(self.screen, COLORS["white"],
+                             (bar_x, bar_y, fill_w, bar_height), border_radius=3)
+        # Borde
+        pygame.draw.rect(self.screen, COLORS["gray"],
+                         (bar_x, bar_y, bar_width, bar_height), 1, border_radius=3)
+        
+        # --- Texto de estado debajo de la barra ---
+        if status_text:
+            st_surf = self.font.render(status_text, True, COLORS["dark_gray"])
+            self.screen.blit(st_surf, (cx - st_surf.get_width() // 2, bar_y + bar_height + 10))
+        
+        # --- Prompt de continuar (parpadeo) ---
+        if show_prompt:
+            prompt = self.font.render("Pulsa cualquier tecla para continuar", True, COLORS["gray"])
+            self.screen.blit(prompt, (cx - prompt.get_width() // 2, bar_y + bar_height + 50))
+        
+        pygame.display.flip()
+    
     def _render_save_menu(self, selected_index: int = 0, mode: str = "select") -> None:
         """Renderiza el menú de selección de guardados."""
         from ..systems.save_manager import save_manager
@@ -1213,8 +1349,7 @@ class Renderer:
         title_lines = [
             "╔═══════════════════════════════════════╗",
             "║                                       ║",
-            "║      ROGUELIKE: EN BUSCA DEL          ║",
-            "║       AMULETO DE YENDOR               ║",
+            "║        La Mansión de Ámbar            ║",
             "║                                       ║",
             "╚═══════════════════════════════════════╝"
         ]
@@ -1286,54 +1421,6 @@ class Renderer:
     def render_save_menu_only(self, selected_index: int = 0, mode: str = "load") -> None:
         """Renderiza solo el menú de guardados (sin necesidad de dungeon/player)."""
         self._render_save_menu(selected_index, mode)
-        pygame.display.flip()
-    
-    def render_main_menu(self) -> None:
-        """Renderiza el menú principal."""
-        self.screen.fill(COLORS["black"])
-        
-        # Título
-        title_lines = [
-            "╔═══════════════════════════════════════╗",
-            "║                                       ║",
-            "║      ROGUELIKE: EN BUSCA DEL          ║",
-            "║       AMULETO DE YENDOR               ║",
-            "║                                       ║",
-            "╚═══════════════════════════════════════╝"
-        ]
-        
-        y_offset = 150
-        for line in title_lines:
-            title_surface = self.font.render(line, True, COLORS["gold"])
-            self.screen.blit(
-                title_surface,
-                ((WINDOW_WIDTH - title_surface.get_width()) // 2, y_offset)
-            )
-            y_offset += FONT_SIZE + 2
-        
-        # Opciones
-        options = [
-            "",
-            "[N] Nueva Partida",
-            "[C] Continuar (si hay guardado)",
-            "[ESC] Salir",
-            "",
-            "Controles:",
-            "Movimiento: Flechas / Numpad / Vi-keys (hjklyubn)",
-            "[ESPACIO] Interactuar  [i] Inventario",
-            "[.] Esperar turno"
-        ]
-        
-        y_offset += 50
-        for option in options:
-            color = COLORS["white"] if option.startswith("[") else COLORS["gray"]
-            opt_surface = self.font.render(option, True, color)
-            self.screen.blit(
-                opt_surface,
-                ((WINDOW_WIDTH - opt_surface.get_width()) // 2, y_offset)
-            )
-            y_offset += FONT_SIZE + 5
-        
         pygame.display.flip()
     
     def tick(self, fps: int) -> float:

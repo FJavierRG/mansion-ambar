@@ -37,6 +37,12 @@ class DialogManager:
         self.text_type: Optional[TextType] = None
         # Cola de mensajes para mostrar secuencialmente
         self.message_queue: deque[Union[TextContent, DialogTree]] = deque()
+        # Referencia al player para evaluar condiciones de opciones
+        self._player: Optional[Player] = None
+    
+    def set_player(self, player: Player) -> None:
+        """Establece la referencia al player para evaluar condiciones de opciones."""
+        self._player = player
     
     def start_dialog(self, dialog_tree: DialogTree) -> bool:
         """
@@ -100,6 +106,8 @@ class DialogManager:
         self.selected_option = 0
         self.text_content = None
         self.text_type = TextType.DIALOG
+        # Asegurar que selected_option apunta a una opción disponible
+        self._ensure_selected_option_available()
         return True
     
     def start_text(self, text_content: TextContent) -> None:
@@ -196,17 +204,57 @@ class DialogManager:
             return None
         return self.current_tree.get_node(self.current_node_id)
     
-    def select_next_option(self) -> None:
-        """Selecciona la siguiente opción."""
+    def get_available_options(self) -> List[tuple]:
+        """
+        Obtiene las opciones disponibles del nodo actual, filtradas por condition.
+        
+        Returns:
+            Lista de tuplas (índice_original, opción) para opciones disponibles
+        """
         node = self.get_current_node()
-        if node and node.options:
-            self.selected_option = (self.selected_option + 1) % len(node.options)
+        if not node or not node.options:
+            return []
+        result = []
+        for i, opt in enumerate(node.options):
+            if opt.condition is None or (self._player and opt.condition(self._player)):
+                result.append((i, opt))
+        return result
+    
+    def _ensure_selected_option_available(self) -> None:
+        """Asegura que selected_option apunte a una opción disponible."""
+        available = self.get_available_options()
+        if not available:
+            return
+        # Si la opción actual no está entre las disponibles, seleccionar la primera
+        available_indices = [i for i, _ in available]
+        if self.selected_option not in available_indices:
+            self.selected_option = available_indices[0]
+    
+    def select_next_option(self) -> None:
+        """Selecciona la siguiente opción disponible."""
+        available = self.get_available_options()
+        if not available:
+            return
+        available_indices = [i for i, _ in available]
+        try:
+            current_pos = available_indices.index(self.selected_option)
+        except ValueError:
+            current_pos = -1
+        next_pos = (current_pos + 1) % len(available_indices)
+        self.selected_option = available_indices[next_pos]
     
     def select_previous_option(self) -> None:
-        """Selecciona la opción anterior."""
-        node = self.get_current_node()
-        if node and node.options:
-            self.selected_option = (self.selected_option - 1) % len(node.options)
+        """Selecciona la opción anterior disponible."""
+        available = self.get_available_options()
+        if not available:
+            return
+        available_indices = [i for i, _ in available]
+        try:
+            current_pos = available_indices.index(self.selected_option)
+        except ValueError:
+            current_pos = 0
+        prev_pos = (current_pos - 1) % len(available_indices)
+        self.selected_option = available_indices[prev_pos]
     
     def select_option(self, player: Player, zone: Zone) -> bool:
         """
@@ -228,7 +276,7 @@ class DialogManager:
         
         option = node.options[self.selected_option]
         
-        # Verificar condición si existe
+        # Verificar condición si existe (doble seguridad)
         if option.condition and not option.condition(player):
             return True  # Opción no disponible, no avanzar
         
@@ -242,6 +290,8 @@ class DialogManager:
             self.selected_option = 0
             # Procesar "---" en el nuevo nodo si existe
             self._process_node_with_separators()
+            # Asegurar que selected_option apunta a una opción disponible
+            self._ensure_selected_option_available()
             return True
         else:
             self.close()
@@ -304,6 +354,7 @@ class DialogManager:
         
         # Cambiar el nodo actual al primero temporal
         self.current_node_id = temp_node_ids[0] if temp_node_ids else last_temp_id
+        self._ensure_selected_option_available()
     
     def close(self) -> bool:
         """

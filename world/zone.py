@@ -28,6 +28,7 @@ class Zone(ABC):
         tiles: Matriz de tiles
         entities: Lista de entidades
         items: Lista de items en el suelo
+        decorations: Decoraciones del suelo {(x,y): sprite_key}
     """
     
     def __init__(
@@ -59,6 +60,7 @@ class Zone(ABC):
         
         self.entities: List[Entity] = []
         self.items: List[Item] = []
+        self.decorations: Dict[Tuple[int, int], Tuple[str, int]] = {}  # {(x,y): ("blood", angle), ...}
     
     @abstractmethod
     def generate(self) -> Tuple[int, int]:
@@ -231,7 +233,18 @@ class Zone(ABC):
             ],
             "entities": [e.to_dict() for e in self.entities],
             "items": [i.to_dict() for i in self.items],
+            "decorations": {f"{x},{y}": {"type": v[0], "angle": v[1]} for (x, y), v in self.decorations.items()},
         }
+    
+    def _restore_decorations(self, data: Dict[str, Any]) -> None:
+        """Restaura las decoraciones desde el diccionario de guardado."""
+        for key, deco_data in data.get("decorations", {}).items():
+            x, y = map(int, key.split(","))
+            if isinstance(deco_data, dict):
+                self.decorations[(x, y)] = (deco_data["type"], deco_data.get("angle", 0))
+            else:
+                # Compatibilidad: formato antiguo era solo un string
+                self.decorations[(x, y)] = (deco_data, 0)
     
     @classmethod
     @abstractmethod

@@ -20,12 +20,13 @@ class Item:
         y: Posición Y en el mapa
         char: Caracter ASCII
         name: Nombre del item
-        color: Color del item
+        color: Color del item (clave en COLORS, para fallback ASCII)
         item_type: Tipo de item (potion, weapon, armor, etc.)
         identified: Si el item ha sido identificado
         usable: Si el item puede usarse
         slot: Slot de equipamiento (si aplica)
         persistent: Si el item persiste al morir (items especiales de misión)
+        sprite: Clave de sprite específico (si aplica, ej: "dagger", "sword")
     """
     
     def __init__(
@@ -66,6 +67,7 @@ class Item:
         self.usable = usable
         self.slot = slot
         self.persistent = persistent
+        self.sprite: Optional[str] = None  # Clave de sprite específico
         
         # Propiedades adicionales que pueden ser sobrescritas
         self.attack_bonus = 0
@@ -107,6 +109,8 @@ class Item:
         # Solo serializar persistent si es True (para no romper saves existentes)
         if self.persistent:
             data["persistent"] = True
+        if self.sprite:
+            data["sprite"] = self.sprite
         return data
     
     @classmethod
@@ -146,6 +150,7 @@ class Item:
             item.attack_bonus = data.get("attack_bonus", 0)
             item.defense_bonus = data.get("defense_bonus", 0)
             item.value = data.get("value", 0)
+            item.sprite = data.get("sprite")
             return item
     
     def __repr__(self) -> str:
@@ -183,10 +188,10 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
     de esta función para garantizar una única fuente de verdad (config.py).
     
     IDs válidos:
-        Pociones : "health_potion", "greater_health_potion", "strength_potion", "poison_potion"
-        Armas    : "dagger", "short_sword", "long_sword", "axe", "great_sword"
-        Armaduras: "leather_armor", "chain_mail", "plate_armor", "dragon_armor"
-        Especiales: "gold", "amulet"
+        Pociones : ver POTION_DATA en config.py
+        Armas    : ver WEAPON_DATA en config.py
+        Armaduras: ver ARMOR_DATA en config.py
+        Especiales: "gold", "amulet", "heart_key"
     
     Args:
         item_id: Identificador único del item (clave en POTION_DATA, WEAPON_DATA, etc.)
@@ -222,7 +227,9 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
             x=x, y=y,
             weapon_type=item_id,
             name=data["name"],
-            attack_bonus=data["attack_bonus"]
+            attack_bonus=data["attack_bonus"],
+            durability=data["durability"],
+            sprite_key=data.get("sprite")
         )
     
     # --- Armaduras ---
@@ -232,14 +239,15 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
             x=x, y=y,
             armor_type=item_id,
             name=data["name"],
-            defense_bonus=data["defense_bonus"]
+            defense_bonus=data["defense_bonus"],
+            durability=data["durability"]
         )
     
     # --- Oro ---
     if item_id == "gold":
         return Gold(x, y, 1)
     
-    # --- Amuleto de Yendor ---
+    # --- Amuleto de Ámbar ---
     if item_id == "amulet":
         return Amulet(x, y)
     
@@ -299,7 +307,7 @@ def create_item_for_floor(floor: int, x: int, y: int, allowed_types: Optional[Li
         total_weight += 0.35
     if "potion" in allowed_types:
         weights["potion"] = 0.40
-        total_weight += 0.40
+        total_weight += 0.20
     if "weapon" in allowed_types:
         weights["weapon"] = 0.15
         total_weight += 0.15
@@ -358,7 +366,9 @@ def _create_random_weapon(floor: int, x: int, y: int) -> Item:
     ]
     
     if not valid_weapons:
-        valid_weapons = [("dagger", WEAPON_DATA["dagger"])]
+        # Fallback: primera arma del diccionario
+        first_key = next(iter(WEAPON_DATA))
+        valid_weapons = [(first_key, WEAPON_DATA[first_key])]
     
     # Seleccionar basado en rareza
     weights = [data["rarity"] for _, data in valid_weapons]
@@ -376,7 +386,9 @@ def _create_random_armor(floor: int, x: int, y: int) -> Item:
     ]
     
     if not valid_armors:
-        valid_armors = [("leather_armor", ARMOR_DATA["leather_armor"])]
+        # Fallback: primera armadura del diccionario
+        first_key = next(iter(ARMOR_DATA))
+        valid_armors = [(first_key, ARMOR_DATA[first_key])]
     
     # Seleccionar basado en rareza
     weights = [data["rarity"] for _, data in valid_armors]

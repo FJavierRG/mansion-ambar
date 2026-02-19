@@ -286,14 +286,19 @@ def create_stranger_mision_nieta_ayudar_dialog() -> DialogTree:
     tree = DialogTree(start_node="start")
     
     def on_give_potion(player, zone):
-        """Da una poción de salud al jugador e incrementa el contador."""
+        """Da una poción de salud al jugador e incrementa el contador.
+        Solo da una poción por run (guarda en qué run se dio la última)."""
         from roguelike.systems.events import event_manager
         from roguelike.items.item import create_item
         
+        # Guarda: solo dar una poción por run
+        last_run = event_manager.get_data("stranger_potion_last_run", -1)
+        if last_run == event_manager.run_count:
+            return
+        
         # Dar poción de salud al jugador
         potion = create_item("health_potion", x=player.x, y=player.y)
-        added = player.add_to_inventory(potion)
-        print(f"[DEBUG] on_give_potion: added={added}, inventario={len(player.inventory)} items, id(player)={id(player)}")
+        player.add_to_inventory(potion)
         
         # Incrementar contador de pociones dadas
         count = event_manager.get_data("stranger_potions_given", 0)
@@ -360,6 +365,42 @@ def create_stranger_indignado_completed() -> InteractiveText:
     """Diálogo corto cuando el estado 'indignado' está completado."""
     return InteractiveText.create_simple_text(
         "Me costó mucho dinero obtenerla, es aún muy pequeña aunque parezca ya una niña crecidita...\nPor favor, tráemela.",
+        title="Stranger",
+        auto_close=False
+    )
+
+
+# ============================================================================
+# ESTADO: "contratado_mercenario" (Lobby - Stranger contrata a otro)
+# ============================================================================
+
+def create_stranger_contratado_mercenario_dialog() -> DialogTree:
+    """
+    Crea el diálogo del Stranger cuando ha contratado a un mercenario.
+    Se llega aquí cuando la nieta completa su diálogo de 'descubierta'.
+    
+    Returns:
+        DialogTree con el diálogo completo
+    """
+    tree = DialogTree(start_node="start")
+    
+    start_node = DialogNode(
+        node_id="start",
+        speaker="Stranger",
+        text="Ya no te necesito. He encontrado a otro que hará mejor el trabajo---Estabas tardando demasiado y no tengo todo el tiempo del mundo.",
+        options=[
+            DialogOption("Continuar", next_node=None)
+        ]
+    )
+    tree.add_node(start_node)
+    
+    return tree
+
+
+def create_stranger_contratado_mercenario_completed() -> InteractiveText:
+    """Diálogo corto cuando el estado 'contratado_mercenario' está completado."""
+    return InteractiveText.create_simple_text(
+        "...",
         title="Stranger",
         auto_close=False
     )
@@ -512,15 +553,16 @@ def register_npc_states(manager) -> None:
     
     # Estado "mision_nieta_ayudar" - Lobby, el Stranger da pociones al jugador
     # Se alcanza programáticamente desde el diálogo de la nieta.
-    # COMPORTAMIENTO ESPECIAL: Cada visita al lobby muestra el diálogo principal
-    # de nuevo (da una poción). Tras 3 runs dando pociones, transiciona a 'indignado'.
+    # COMPORTAMIENTO: Da una poción por run. Tras 3 runs, transiciona a 'indignado'.
+    # completion_condition permite que _on_dialog_closed marque COMPLETED tras hablar,
+    # así las interacciones siguientes en la misma visita muestran el diálogo corto.
     def check_indignado_transition(player, zone):
         """
         Verifica si el Stranger debe transicionar a 'indignado'.
         
         Requiere que se hayan dado 3+ pociones (una por run).
-        Si aún no se cumple, resetea el estado a IN_PROGRESS para que
-        la próxima visita al lobby muestre el diálogo principal de nuevo.
+        Si aún no se cumple, resetea el estado a IN_PROGRESS solo si estamos
+        en una run nueva (para que la próxima visita muestre el diálogo principal).
         """
         from roguelike.systems.npc_states import npc_state_manager, StateCompletion
         
@@ -528,11 +570,14 @@ def register_npc_states(manager) -> None:
         if count >= 3:
             return True
         
-        # Aún no suficientes pociones: resetear a IN_PROGRESS
-        # para que la próxima visita muestre el diálogo principal (no el completado)
-        npc_state_manager.set_state_completion(
-            "Stranger", "mision_nieta_ayudar", StateCompletion.IN_PROGRESS
-        )
+        # Solo resetear a IN_PROGRESS si estamos en una run nueva
+        # (la poción se dio en una run anterior). Esto permite que dentro
+        # de la misma visita el estado siga COMPLETED y muestre el diálogo corto.
+        last_run = event_manager.get_data("stranger_potion_last_run", -1)
+        if last_run != event_manager.run_count:
+            npc_state_manager.set_state_completion(
+                "Stranger", "mision_nieta_ayudar", StateCompletion.IN_PROGRESS
+            )
         return False
     
     manager.register_npc_state("Stranger", NPCStateConfig(
@@ -541,6 +586,7 @@ def register_npc_states(manager) -> None:
         position=(40, 20),
         dialog_tree_func=create_stranger_mision_nieta_ayudar_dialog,
         completed_dialog_func=create_stranger_mision_nieta_ayudar_completed,
+        completion_condition=lambda p, z: True,  # Siempre se completa tras hablar (1 poción por visita)
         spawn_condition=lambda floor, evt_mgr: evt_mgr.is_event_triggered("mision_nieta_ayudar_started"),
         transitions=[
             StateTransition(
@@ -553,13 +599,54 @@ def register_npc_states(manager) -> None:
     
     # Estado "indignado" - Lobby, el Stranger revela la verdad sobre la niña
     # Se alcanza por transición desde mision_nieta_ayudar tras 3 runs.
+    # Transiciona a contratado_mercenario cuando la nieta completa su diálogo de descubierta.
     manager.register_npc_state("Stranger", NPCStateConfig(
         state_id="indignado",
         zone_type="lobby",
         position=(40, 20),
         dialog_tree_func=create_stranger_indignado_dialog,
         completed_dialog_func=create_stranger_indignado_completed,
+        completion_condition=lambda p, z: True,  # Se completa tras agotar el diálogo principal
         spawn_condition=lambda floor, evt_mgr: evt_mgr.is_event_triggered("stranger_indignado") or evt_mgr.get_data("stranger_potions_given", 0) >= 3,
+        transitions=[
+            StateTransition(
+                target_state="contratado_mercenario",
+                condition=lambda p, z: event_manager.is_event_triggered("nieta_descubierta"),
+                description="Cuando la nieta completa su diálogo de descubierta"
+            )
+        ]
+    ))
+    
+    # Estado "contratado_mercenario" - Lobby, el Stranger contrata a otro
+    # Se alcanza programáticamente desde el diálogo de la nieta (descubierta).
+    # Necesita spawn_condition para evitar ser seleccionado como estado inicial.
+    def check_desaparecido_transition(player, zone):
+        """Verifica si Stranger debe desaparecer (nieta recibió el veneno)."""
+        return event_manager.is_event_triggered("nieta_veneno_entregado")
+    
+    manager.register_npc_state("Stranger", NPCStateConfig(
+        state_id="contratado_mercenario",
+        zone_type="lobby",
+        position=(40, 20),
+        dialog_tree_func=create_stranger_contratado_mercenario_dialog,
+        completed_dialog_func=create_stranger_contratado_mercenario_completed,
+        completion_condition=lambda p, z: True,
+        spawn_condition=lambda floor, evt_mgr: evt_mgr.is_event_triggered("nieta_descubierta"),
+        transitions=[
+            StateTransition(
+                target_state="desaparecido",
+                condition=check_desaparecido_transition,
+                description="Cuando la nieta recibe el veneno y huye"
+            )
+        ]
+    ))
+    
+    # Estado "desaparecido" - Stranger desaparece tras la huida de la nieta
+    # zone_type=None hace que no spawnee en ninguna zona.
+    # Se llega cuando la nieta recibe el veneno y huye.
+    manager.register_npc_state("Stranger", NPCStateConfig(
+        state_id="desaparecido",
+        zone_type=None,  # No aparece en ninguna zona
     ))
 
 

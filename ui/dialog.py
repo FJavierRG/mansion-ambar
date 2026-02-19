@@ -101,22 +101,25 @@ class DialogRenderer:
             screen.blit(text_surface, (text_x, text_y))
             text_y += FONT_SIZE + 5
         
-        # Opciones
+        # Opciones (solo las disponibles según sus condiciones)
         if node.options:
-            text_y += 10  # Espacio antes de las opciones
+            from ..systems.dialog_manager import dialog_manager
+            available = dialog_manager.get_available_options()
             
-            for i, option in enumerate(node.options):
-                # Verificar si la opción está disponible
-                option_text = option.text
-                option_color = COLORS["white"] if i == selected_option else COLORS["gray"]
+            if available:
+                text_y += 10  # Espacio antes de las opciones
                 
-                # Marcar opción seleccionada
-                prefix = "> " if i == selected_option else "  "
-                option_line = f"{prefix}{option_text}"
-                
-                option_surface = self.font.render(option_line, True, option_color)
-                screen.blit(option_surface, (text_x + 10, text_y))
-                text_y += FONT_SIZE + 5
+                for orig_idx, option in available:
+                    option_text = option.text
+                    option_color = COLORS["white"] if orig_idx == selected_option else COLORS["gray"]
+                    
+                    # Marcar opción seleccionada
+                    prefix = "> " if orig_idx == selected_option else "  "
+                    option_line = f"{prefix}{option_text}"
+                    
+                    option_surface = self.font.render(option_line, True, option_color)
+                    screen.blit(option_surface, (text_x + 10, text_y))
+                    text_y += FONT_SIZE + 5
         
         # Instrucciones
         if node.options:

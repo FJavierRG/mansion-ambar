@@ -149,5 +149,6 @@ def register_npc_states(manager) -> None:
         color="potion",
         dialog_tree_func=create_alchemist_cadaver_dialog,
         completed_dialog_func=create_alchemist_cadaver_completed,
+        completion_condition=lambda p, z: True,
         spawn_condition=lambda floor, evt_mgr: evt_mgr.is_event_triggered("alchemist_second_poison"),
     ))

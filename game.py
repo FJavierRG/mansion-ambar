@@ -146,6 +146,9 @@ class Game:
     
     def run(self) -> None:
         """Loop principal del juego."""
+        # Pantalla de splash: carga assets y espera input del jugador
+        self.renderer.show_splash_and_load()
+        
         while self.running:
             if self.state == GameState.MAIN_MENU:
                 self._handle_main_menu()
@@ -186,6 +189,8 @@ class Game:
                     self.running = False
                 elif event.type == pygame.KEYDOWN:
                     self._handle_input(event.key)
+                elif event.type == pygame.TEXTINPUT and self.state == GameState.CONSOLE:
+                    self.console_input += event.text
         else:
             # Durante animaciones, solo procesar quit
             for event in pygame.event.get():
@@ -836,36 +841,8 @@ class Game:
             self.console_input = self.console_input[:-1]
             return
         
-        # Capturar texto (solo caracteres imprimibles)
-        if pygame.K_SPACE <= key <= pygame.K_z:
-            # Obtener el carácter correspondiente
-            mods = pygame.key.get_mods()
-            char = None
-            
-            # Manejar mayúsculas/minúsculas
-            if pygame.K_a <= key <= pygame.K_z:
-                if mods & pygame.KMOD_SHIFT:
-                    char = chr(key).upper()
-                else:
-                    char = chr(key).lower()
-            elif key == pygame.K_SPACE:
-                char = " "
-            elif key == pygame.K_MINUS or key == pygame.K_KP_MINUS:
-                # Guion o barra baja dependiendo de Shift
-                if mods & pygame.KMOD_SHIFT:
-                    char = "_"
-                else:
-                    char = "-"
-            elif key == pygame.K_UNDERSCORE:
-                # También manejar K_UNDERSCORE explícitamente (por si acaso)
-                char = "_"
-            elif pygame.K_0 <= key <= pygame.K_9:
-                char = chr(key)
-            elif pygame.K_KP0 <= key <= pygame.K_KP9:
-                char = str(key - pygame.K_KP0)
-            
-            if char:
-                self.console_input += char
+        # La entrada de texto se captura via pygame.TEXTINPUT en el game loop,
+        # que respeta el layout de teclado (español, etc.).
     
     def _handle_save_menu_input(self, key: int) -> None:
         """Maneja la entrada en el menú de selección de guardados."""
@@ -1028,6 +1005,7 @@ class Game:
         from .systems.text import TextType
         
         if interactive_text.text_type == TextType.DIALOG:
+            dialog_manager.set_player(self.player)
             if dialog_manager.start_dialog(interactive_text.dialog_tree):
                 self.state = GameState.DIALOG
         elif interactive_text.text_type == TextType.SIMPLE:
@@ -1143,6 +1121,20 @@ class Game:
             if current_completion != StateCompletion.COMPLETED:
                 if state_cfg and state_cfg.completion_condition is not None:
                     npc_state_manager.set_state_completion(npc_name, current_state, StateCompletion.COMPLETED)
+        
+        # Detectar si una acción del diálogo cambió el estado programáticamente
+        # (ej: on_give_poison cambia nieta a "huida" con zone_type=None)
+        # Si el nuevo estado está en otra zona (o en ninguna), eliminar la entidad
+        if interaction_state and current_state and interaction_state != current_state and entity_in_zone:
+            new_state_config = npc_state_manager.get_state_config(npc_name, current_state)
+            if new_state_config:
+                # zone_type=None → NPC no debe aparecer en ningún sitio
+                # zone_type diferente → NPC se fue a otra zona
+                current_zone_type = getattr(self.dungeon, 'zone_type', None)
+                if new_state_config.zone_type is None or new_state_config.zone_type != current_zone_type:
+                    self.dungeon.entities.remove(entity)
+                    self.message_log.add(f"{npc_name} se ha ido...", "message_important")
+                    entity_in_zone = False
         
         # Actualizar el diálogo del NPC (solo si la entidad sigue en la zona)
         # Usar el estado ACTUAL (puede haber cambiado por la acción del diálogo)

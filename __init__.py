@@ -1,5 +1,5 @@
 """
-Roguelike: En Busca del Amuleto de Yendor
+La Mansión de Ámbar
 
 Un roguelike clásico inspirado en el juego original Rogue.
 """

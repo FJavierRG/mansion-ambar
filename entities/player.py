@@ -30,7 +30,7 @@ class Player(Entity):
         gold: Oro acumulado
         current_floor: Piso actual de la mazmorra
         total_xp: Experiencia total ganada
-        has_amulet: Si tiene el Amuleto de Yendor
+        has_amulet: Si tiene el Amuleto de Ámbar
     """
     
     def __init__(

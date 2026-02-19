@@ -60,6 +60,13 @@ class Combat:
             # Aplicar daño
             defender.fighter.take_damage(damage)
             
+            # Colocar sangre en el suelo (si no hay ya)
+            if defender.dungeon and hasattr(defender.dungeon, 'decorations'):
+                pos = (defender.x, defender.y)
+                if pos not in defender.dungeon.decorations:
+                    angle = random.choice([0, 90, 180, 270])
+                    defender.dungeon.decorations[pos] = ("blood", angle)
+            
             # Añadir número de daño flotante si hay animation_manager
             if animation_manager:
                 # Determinar si el atacante es el jugador
@@ -86,8 +93,8 @@ class Combat:
                     f"por {damage} de daño."
                 )
             
-            # Aplicar desgaste de equipo
-            messages.extend(Combat._apply_equipment_wear(attacker, defender, damage))
+            # Aplicar desgaste de equipo (solo en ataques confirmados)
+            messages.extend(Combat._apply_equipment_wear(attacker, defender, animation_manager))
             
             # Verificar muerte
             if defender.fighter.is_dead:
@@ -149,14 +156,17 @@ class Combat:
         return messages
     
     @staticmethod
-    def _apply_equipment_wear(attacker: Entity, defender: Entity, damage: int) -> List[str]:
+    def _apply_equipment_wear(attacker: Entity, defender: Entity, animation_manager=None) -> List[str]:
         """
-        Aplica desgaste al equipo del atacante (arma) y defensor (armadura).
+        Aplica desgaste al equipo tras un ataque confirmado (no fallo).
+        
+        - Arma del atacante: pierde 1 de vida por ataque confirmado.
+        - Armadura del defensor: pierde 1 de vida por golpe recibido confirmado.
         
         Args:
             attacker: Entidad atacante
             defender: Entidad defensora
-            damage: Daño causado
+            animation_manager: Gestor de animaciones (para texto flotante)
             
         Returns:
             Lista de mensajes sobre el desgaste
@@ -171,26 +181,52 @@ class Combat:
             
             if weapon.is_broken():
                 messages.append(f"¡Tu {weapon.name} se ha roto!")
+                # Texto flotante tachado sobre el jugador
+                if animation_manager:
+                    animation_manager.add_floating_text(
+                        x=attacker.x,
+                        y=attacker.y,
+                        text=weapon.name,
+                        text_style="strikethrough"
+                    )
+                # Sonido de equipo roto
+                from ..systems.music import music_manager
+                music_manager.play_sound("broken_equip.mp3")
                 attacker.equipped["weapon"] = None
-                # Eliminar del inventario si está ahí
                 if weapon in attacker.inventory:
                     attacker.inventory.remove(weapon)
-            elif weapon.durability <= 20:
-                messages.append(f"Tu {weapon.name} está muy dañada ({weapon.durability}%).")
+            elif weapon.durability == 1:
+                messages.append(
+                    f"Tu {weapon.name} está a punto de romperse "
+                    f"({weapon.durability}/{weapon.max_durability})."
+                )
         
         # Desgaste de la armadura del defensor (si es jugador)
         if isinstance(defender, Player) and defender.equipped.get("armor"):
             armor = defender.equipped["armor"]
-            armor.take_damage(damage)
+            armor.take_hit()
             
             if armor.is_broken():
                 messages.append(f"¡Tu {armor.name} se ha destrozado!")
+                # Texto flotante tachado sobre el jugador
+                if animation_manager:
+                    animation_manager.add_floating_text(
+                        x=defender.x,
+                        y=defender.y,
+                        text=armor.name,
+                        text_style="strikethrough"
+                    )
+                # Sonido de equipo roto
+                from ..systems.music import music_manager
+                music_manager.play_sound("broken_equip.mp3")
                 defender.equipped["armor"] = None
-                # Eliminar del inventario si está ahí
                 if armor in defender.inventory:
                     defender.inventory.remove(armor)
-            elif armor.durability <= 20:
-                messages.append(f"Tu {armor.name} está muy dañada ({armor.durability}%).")
+            elif armor.durability == 1:
+                messages.append(
+                    f"Tu {armor.name} está a punto de romperse "
+                    f"({armor.durability}/{armor.max_durability})."
+                )
         
         return messages
     

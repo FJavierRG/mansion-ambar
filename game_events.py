@@ -190,6 +190,51 @@ def register_stranger_event() -> None:
         action_remove_entity_from_zone("nieta", zone_type="dungeon")
     )
     
+    # Evento: Stranger indignado (revela la verdad sobre la niña)
+    event_stranger_indignado = GameEvent(
+        event_id="stranger_indignado",
+        name="Stranger indignado",
+        description="El Stranger revela la verdad sobre la niña y se enfurece",
+        persistent=True,
+        auto_trigger=False
+    )
+    
+    # Evento: Nieta descubierta (Stranger → contratado_mercenario)
+    event_nieta_descubierta = GameEvent(
+        event_id="nieta_descubierta",
+        name="Nieta descubierta",
+        description="La nieta ha sido descubierta por el Stranger. El Stranger contrata a un mercenario.",
+        persistent=True,
+        auto_trigger=False
+    )
+    
+    # Evento: Nieta recibe veneno del jugador
+    event_nieta_veneno = GameEvent(
+        event_id="nieta_veneno_entregado",
+        name="Veneno entregado a la nieta",
+        description="El jugador dio una poción de veneno a la nieta para que se defienda",
+        persistent=True,
+        auto_trigger=False
+    )
+    
+    # Evento: Nieta huye con el veneno
+    event_nieta_huida = GameEvent(
+        event_id="nieta_huida",
+        name="Nieta huye",
+        description="La nieta se escabulle con el veneno y desaparece",
+        persistent=True,
+        auto_trigger=False
+    )
+    
+    # Evento: Stranger desaparece tras la huida de la nieta
+    event_stranger_desaparecido = GameEvent(
+        event_id="stranger_desaparecido",
+        name="Stranger desaparecido",
+        description="El Stranger desaparece tras la huida de la nieta con el veneno",
+        persistent=True,
+        auto_trigger=False
+    )
+    
     # Registrar eventos
     event_manager.register_event(event_stranger_met)
     event_manager.register_event(event_stranger_lobby_weapons)
@@ -201,6 +246,11 @@ def register_stranger_event() -> None:
     event_manager.register_event(event_mision_nieta_ayudar)
     event_manager.register_event(event_nieta_obligada)
     event_manager.register_event(event_nieta_ayudando)
+    event_manager.register_event(event_stranger_indignado)
+    event_manager.register_event(event_nieta_descubierta)
+    event_manager.register_event(event_nieta_veneno)
+    event_manager.register_event(event_nieta_huida)
+    event_manager.register_event(event_stranger_desaparecido)
 
 
 def register_npc_floor5_event() -> None:

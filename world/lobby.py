@@ -196,6 +196,7 @@ class Lobby(Zone):
             "dungeon_entrance": self.dungeon_entrance,
             # Solo guardamos items (estado dinámico del suelo)
             "items": [i.to_dict() for i in self.items],
+            "decorations": {f"{x},{y}": {"type": v[0], "angle": v[1]} for (x, y), v in self.decorations.items()},
         }
     
     @classmethod
@@ -220,5 +221,8 @@ class Lobby(Zone):
         for item_data in data.get("items", []):
             item = Item.from_dict(item_data)
             lobby.items.append(item)
+        
+        # Restaurar decoraciones (sangre, etc.)
+        lobby._restore_decorations(data)
         
         return lobby

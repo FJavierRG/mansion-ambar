@@ -11,10 +11,9 @@ from ..config import (
     MAP_WIDTH, MAP_HEIGHT, ROOM_MIN_SIZE, ROOM_MAX_SIZE,
     MAX_ROOMS, MAX_ROOM_MONSTERS, MAX_DUNGEON_LEVEL,
     SYMBOLS, DOOR_CHANCE,
-    FLOOR_COMBAT_ITEMS_BASE, FLOOR_COMBAT_ITEMS_VARIANCE,
-    FLOOR_COMBAT_ITEMS_MIN, FLOOR_COMBAT_ITEMS_FLOOR_DIV,
-    FLOOR_GOLD_BASE, FLOOR_GOLD_VARIANCE,
-    FLOOR_GOLD_MIN, FLOOR_GOLD_FLOOR_DIV,
+    FLOOR_COMBAT_ITEMS, FLOOR_COMBAT_ITEMS_DEFAULT,
+    FLOOR_GOLD_ITEMS, FLOOR_GOLD_ITEMS_DEFAULT,
+    FLOOR_ROOM_COUNT, FLOOR_ROOM_COUNT_DEFAULT,
 )
 
 if TYPE_CHECKING:
@@ -67,6 +66,7 @@ class Dungeon:
         self.rooms: List[Room] = []
         self.entities: List[Entity] = []
         self.items: List[Item] = []
+        self.decorations: Dict[Tuple[int, int], Tuple[str, int]] = {}  # {(x,y): ("blood", angle), ...}
         
         self.stairs_down: Optional[Tuple[int, int]] = None
         self.stairs_up: Optional[Tuple[int, int]] = None
@@ -84,9 +84,13 @@ class Dungeon:
         Returns:
             Posición inicial del jugador (centro de la primera habitación)
         """
+        # Determinar número de salas para esta planta (progresivo)
+        min_rooms, max_rooms = FLOOR_ROOM_COUNT.get(self.floor, FLOOR_ROOM_COUNT_DEFAULT)
+        target_rooms = random.randint(min_rooms, max_rooms)
+        
         # Generar habitaciones
-        for _ in range(MAX_ROOMS * 2):  # Intentar más veces
-            if len(self.rooms) >= MAX_ROOMS:
+        for _ in range(target_rooms * 3):  # Suficientes intentos para alcanzar el objetivo
+            if len(self.rooms) >= target_rooms:
                 break
             
             # Tamaño aleatorio
@@ -273,17 +277,16 @@ class Dungeon:
         """Puebla la mazmorra con monstruos e items.
         
         Los monstruos se generan por habitación.
-        Los items se generan por planta con dos pools independientes:
+        Los items se distribuyen con round-robin entre salas (dos pools):
           - Pool de combate: pociones, armas, armaduras
-          - Pool de oro: monedas (solo en Fase 3)
-        Luego se distribuyen aleatoriamente entre las salas elegibles.
+          - Pool de oro: monedas (separado, sobrevive entre runs)
         """
         from ..entities.monster import Monster, create_monster_for_floor
         from ..items.item import create_item_for_floor, create_item
         
         eligible_rooms = self.rooms[1:]  # Excluir sala de spawn
         
-        # --- Monstruos (por habitación, sin cambios) ---
+        # --- Monstruos (por habitación) ---
         for room in eligible_rooms:
             num_monsters = random.randint(0, min(MAX_ROOM_MONSTERS, 1 + self.floor // 2))
             for _ in range(num_monsters):
@@ -292,38 +295,31 @@ class Dungeon:
                     monster = create_monster_for_floor(self.floor, x, y, self)
                     self.entities.append(monster)
         
-        # --- Items: sistema per-floor con desbloqueo progresivo ---
+        # --- Items: desbloqueo progresivo por narrativa ---
         # Fase 1: Sin items (primera run, va a puños)
-        # Fase 2: Solo armas y armaduras (después de primera charla con Stranger)
-        # Fase 3: Todo + monedas de oro (después de segunda charla)
+        # Fase 2: Solo armas y armaduras
+        # Fase 3: Todo + monedas de oro
         from ..systems.events import event_manager
         
         weapons_unlocked = event_manager.is_event_triggered("stranger_lobby_weapons_unlocked")
         potions_unlocked = event_manager.is_event_triggered("stranger_lobby_potions_unlocked")
         
         if weapons_unlocked and eligible_rooms:
-            # Tipos permitidos para el pool de combate
             combat_types = ["weapon", "armor", "potion"] if potions_unlocked else ["weapon", "armor"]
             
-            # Pool 1: Items de combate
-            combat_penalty = (self.floor - 1) // FLOOR_COMBAT_ITEMS_FLOOR_DIV
-            num_combat = max(
-                FLOOR_COMBAT_ITEMS_MIN,
-                FLOOR_COMBAT_ITEMS_BASE + random.randint(0, FLOOR_COMBAT_ITEMS_VARIANCE) - combat_penalty
-            )
-            self._distribute_items_in_rooms(
+            # Pool 1: Items de combate (round-robin)
+            min_c, max_c = FLOOR_COMBAT_ITEMS.get(self.floor, FLOOR_COMBAT_ITEMS_DEFAULT)
+            num_combat = random.randint(min_c, max_c)
+            self._distribute_items_round_robin(
                 eligible_rooms, num_combat,
                 lambda x, y: create_item_for_floor(self.floor, x, y, allowed_types=combat_types)
             )
             
-            # Pool 2: Monedas de oro (solo Fase 3)
+            # Pool 2: Oro (round-robin, separado — solo Fase 3)
             if potions_unlocked:
-                gold_penalty = (self.floor - 1) // FLOOR_GOLD_FLOOR_DIV
-                num_gold = max(
-                    FLOOR_GOLD_MIN,
-                    FLOOR_GOLD_BASE + random.randint(0, FLOOR_GOLD_VARIANCE) - gold_penalty
-                )
-                self._distribute_items_in_rooms(
+                min_g, max_g = FLOOR_GOLD_ITEMS.get(self.floor, FLOOR_GOLD_ITEMS_DEFAULT)
+                num_gold = random.randint(min_g, max_g)
+                self._distribute_items_round_robin(
                     eligible_rooms, num_gold,
                     lambda x, y: create_item("gold", x, y)
                 )
@@ -335,14 +331,18 @@ class Dungeon:
         # Spawn automático de NPCs basado en configuración de estados
         self.spawn_npcs_from_states()
     
-    def _distribute_items_in_rooms(
+    def _distribute_items_round_robin(
         self,
         rooms: List[Room],
         count: int,
         item_factory,
         max_retries: int = 3
     ) -> None:
-        """Distribuye items aleatoriamente entre las salas.
+        """Distribuye items entre salas con round-robin barajado.
+        
+        Recorre las salas en orden aleatorio y cicla al acabar la lista,
+        re-barajando en cada vuelta. Esto reparte items de forma uniforme
+        sin hardcodear límites por sala.
         
         Args:
             rooms: Salas elegibles
@@ -350,8 +350,19 @@ class Dungeon:
             item_factory: Callable(x, y) -> Item
             max_retries: Reintentos por item si la posición está ocupada
         """
+        if not rooms:
+            return
+        
+        # Crear cola round-robin barajada
+        queue: List[Room] = []
+        
         for _ in range(count):
-            room = random.choice(rooms)
+            # Rellenar y re-barajar cuando se agota la cola
+            if not queue:
+                queue = list(rooms)
+                random.shuffle(queue)
+            
+            room = queue.pop()
             for _retry in range(max_retries):
                 x, y = self._get_random_room_position(room)
                 if not self.get_item_at(x, y):
@@ -580,6 +591,7 @@ class Dungeon:
             "stairs_down": self.stairs_down,
             "stairs_up": self.stairs_up,
             "boss_spawned": self.boss_spawned,
+            "decorations": {f"{x},{y}": {"type": v[0], "angle": v[1]} for (x, y), v in self.decorations.items()},
         }
     
     @classmethod
@@ -629,6 +641,14 @@ class Dungeon:
         dungeon.stairs_down = tuple(data["stairs_down"]) if data["stairs_down"] else None
         dungeon.stairs_up = tuple(data["stairs_up"]) if data["stairs_up"] else None
         dungeon.boss_spawned = data.get("boss_spawned", False)
+        
+        # Restaurar decoraciones (sangre, etc.)
+        for key, deco_data in data.get("decorations", {}).items():
+            x, y = map(int, key.split(","))
+            if isinstance(deco_data, dict):
+                dungeon.decorations[(x, y)] = (deco_data["type"], deco_data.get("angle", 0))
+            else:
+                dungeon.decorations[(x, y)] = (deco_data, 0)
         
         # Asegurar que los NPCs estén en el estado correcto usando el sistema FSM
         # Esto reemplaza cualquier NPC cargado con uno creado usando el FSM

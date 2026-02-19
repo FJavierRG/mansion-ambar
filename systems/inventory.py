@@ -59,7 +59,7 @@ class Inventory:
         if item.item_type == "amulet":
             player.has_amulet = True
             dungeon.remove_item(item)
-            messages.append("¡Has encontrado el Amuleto de Yendor!")
+            messages.append("¡Has encontrado el Amuleto de Ámbar!")
             messages.append("¡Ahora debes escapar ascendiendo a la superficie!")
             return messages
         

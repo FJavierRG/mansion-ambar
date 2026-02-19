@@ -167,6 +167,31 @@ class AnimationManager:
             )
         )
     
+    def add_floating_text(
+        self,
+        x: int,
+        y: int,
+        text: str,
+        text_style: str = "normal"
+    ) -> None:
+        """
+        Añade un texto flotante personalizado.
+        
+        Args:
+            x: Posición X (en tiles)
+            y: Posición Y (en tiles)
+            text: Texto a mostrar
+            text_style: Estilo del texto ("normal" o "strikethrough")
+        """
+        self.damage_numbers.append(
+            DamageNumber(
+                x=x,
+                y=y - 0.3,
+                text=text,
+                text_style=text_style
+            )
+        )
+    
     def update(self) -> None:
         """Actualiza todas las animaciones activas y números de daño."""
         current_time = time.time()
@@ -231,6 +256,8 @@ class DamageNumber:
         damage: Cantidad de daño a mostrar
         is_critical: Si es un golpe crítico
         is_player_attack: Si el atacante es el jugador (blanco) o enemigo (rojo)
+        text: Texto personalizado (si se define, se muestra en lugar de damage)
+        text_style: Estilo del texto ("normal" o "strikethrough")
         duration: Duración total en segundos
         elapsed: Tiempo transcurrido
         offset_y: Offset vertical acumulado (se mueve hacia arriba)
@@ -238,9 +265,11 @@ class DamageNumber:
     """
     x: float
     y: float
-    damage: int
+    damage: int = 0
     is_critical: bool = False
     is_player_attack: bool = False
+    text: Optional[str] = None
+    text_style: str = "normal"
     duration: float = 1.0  # Duración total de 1 segundo
     elapsed: float = 0.0
     offset_y: float = 0.0

@@ -725,3 +725,6 @@ class NPCStateManager:
 
 # Instancia global del gestor de estados
 npc_state_manager = NPCStateManager()
+
+
+    

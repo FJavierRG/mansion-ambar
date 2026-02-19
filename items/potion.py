@@ -60,6 +60,8 @@ class Potion(Item):
         self.effect = effect
         self.effect_value = value
         self.duration = duration
+        # Sprite específico por tipo de poción (ej: poison_potion → pocion_veneno.png)
+        self.sprite = potion_type
     
     def use(self, player: Player) -> Tuple[List[str], bool]:
         """

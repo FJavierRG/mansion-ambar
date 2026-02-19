@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Roguelike: En Busca del Amuleto de Yendor
+La Mansión de Ámbar
 
 Un roguelike clásico inspirado en Rogue, desarrollado con Python y Pygame.
 
 Objetivo: Descender hasta el piso 10, derrotar al Dragón Anciano,
-obtener el Amuleto de Yendor y escapar a la superficie.
+obtener el Amuleto de Ámbar y escapar a la superficie.
 
 Controles:
 - Movimiento: Flechas, Numpad, o Vi-keys (hjklyubn)
@@ -14,7 +14,6 @@ Controles:
 - [.] Esperar turno
 - [ESC] Pausa
 
-Autor: Generado con IA
 Versión: 1.0.0
 """
 

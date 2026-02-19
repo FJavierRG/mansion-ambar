@@ -9,7 +9,7 @@ Ejemplo de uso externo (usando la factoría de items):
     from roguelike.systems.shop import get_merchant_shop, create_shop_item
 
     shop = get_merchant_shop()
-    shop.add_item(create_shop_item("short_sword", price=50, stock=1))
+    shop.add_item(create_shop_item("dagger", price=50, stock=1))
     shop.remove_item("Poción de Vida")
 """
 from __future__ import annotations
@@ -77,11 +77,11 @@ def _auto_description(item_id: str) -> str:
     
     if item_id in WEAPON_DATA:
         data = WEAPON_DATA[item_id]
-        return f"+{data['attack_bonus']} ATK"
+        return f"+{data['attack_bonus']} ATK, {data['durability']} usos"
     
     if item_id in ARMOR_DATA:
         data = ARMOR_DATA[item_id]
-        return f"+{data['defense_bonus']} DEF"
+        return f"+{data['defense_bonus']} DEF, {data['durability']} usos"
     
     # Especiales
     if item_id == "gold":
@@ -116,7 +116,7 @@ def _auto_name(item_id: str) -> str:
     # Especiales
     names = {
         "gold": "Moneda de oro",
-        "amulet": "Amuleto de Yendor",
+        "amulet": "Amuleto de Ámbar",
         "heart_key": "Llave con forma de corazón",
     }
     return names.get(item_id, item_id)
@@ -136,7 +136,7 @@ def create_shop_item(
     a menos que se proporcionen manualmente.
     
     Args:
-        item_id: ID del item en la factoría (ej: "health_potion", "short_sword")
+        item_id: ID del item en la factoría (ej: "health_potion", "dagger")
         price: Precio en monedas de oro
         stock: Cantidad disponible (-1 = ilimitado, >0 = limitado)
         name: Nombre override (None = automático desde config)
@@ -146,7 +146,7 @@ def create_shop_item(
         ShopItem listo para añadir a una tienda
         
     Ejemplo:
-        shop.add_item(create_shop_item("short_sword", price=50, stock=1))
+        shop.add_item(create_shop_item("dagger", price=50, stock=1))
         shop.add_item(create_shop_item("health_potion", price=10))
     """
     resolved_name = name if name is not None else _auto_name(item_id)
@@ -338,7 +338,7 @@ UNLOCK_COST_MULTIPLIER: int = 1
 #   sum(precio[0..N]) × UNLOCK_COST_MULTIPLIER
 MERCHANT_ITEM_POOL: list[tuple[str, int]] = [
     ("health_potion",        10),
-    ("dagger",                3),
+    ("bronze_dagger",         3),
     ("leather_armor",         3),
     ("short_sword",           6),
     ("chain_mail",            6),
@@ -346,8 +346,8 @@ MERCHANT_ITEM_POOL: list[tuple[str, int]] = [
     ("long_sword",           10),
     ("plate_armor",          10),
     ("strength_potion",      15),
-    ("axe",                  15),
-    ("great_sword",          20),
+    ("war_axe",              15),
+    ("commander_sword",      20),
     ("dragon_armor",         20),
 ]
 

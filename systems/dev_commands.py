@@ -125,7 +125,7 @@ class DevCommandManager:
         # Comando: amulet
         self.register_command(
             "amulet",
-            "Da el Amuleto de Yendor al jugador",
+            "Da el Amuleto de Ámbar al jugador",
             "amulet",
             self._cmd_amulet
         )
@@ -170,6 +170,14 @@ class DevCommandManager:
             self._cmd_shop_restock
         )
         
+        # Comando: scenario
+        self.register_command(
+            "scenario",
+            "Carga un escenario de test (configura eventos y estados de NPC)",
+            "scenario nieta_descubierta",
+            self._cmd_scenario
+        )
+        
         # Comando: help
         self.register_command(
             "help",
@@ -212,7 +220,7 @@ class DevCommandManager:
         if not parts:
             return []
         
-        cmd_name = parts[0].lower()
+        cmd_name = parts[0].lower().lstrip("/")  # Permitir /comando o comando
         args = parts[1:] if len(parts) > 1 else []
         
         if cmd_name not in self.commands:
@@ -407,13 +415,13 @@ class DevCommandManager:
         # Verificar si ya tiene el amuleto
         has_amulet = any(isinstance(item, Amulet) for item in game.player.inventory)
         if has_amulet:
-            return ["Ya tienes el Amuleto de Yendor."]
+            return ["Ya tienes el Amuleto de Ámbar."]
         
         amulet = create_item("amulet", x=game.player.x, y=game.player.y)
         if len(game.player.inventory) < 26:
             game.player.inventory.append(amulet)
             game.player.has_amulet = True
-            return ["Amuleto de Yendor añadido al inventario."]
+            return ["Amuleto de Ámbar añadido al inventario."]
         else:
             return ["Inventario lleno."]
     
@@ -837,6 +845,267 @@ class DevCommandManager:
             "[DEV] Restock activado. La tienda tiene stock completo.",
             f"Items desbloqueados: {unlocked} (donado: {donated_total})",
         ]
+    
+    # ============================================================================
+    # SISTEMA DE ESCENARIOS DE TEST
+    # ============================================================================
+    
+    # Cada escenario define:
+    #   "events": lista de event_ids a activar
+    #   "states": lista de tuplas (npc_name, state_id) para establecer estados FSM
+    #   "items":  lista de item_ids a dar al jugador (opcional)
+    #   "desc":   descripción corta del escenario
+    
+    TEST_SCENARIOS = {
+        # ── STRANGER ──────────────────────────────────────────────
+        "stranger_start": {
+            "desc": "Stranger recién encontrado en piso 5",
+            "events": ["stranger_floor5_met"],
+            "states": [("Stranger", "start")],
+        },
+        "stranger_mision": {
+            "desc": "Stranger en lobby, misión de buscar a la nieta activa",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+            ],
+            "states": [("Stranger", "mision_nieta")],
+        },
+        # ── NIETA: rama obligar ───────────────────────────────────
+        "nieta_found": {
+            "desc": "Pre-encuentro con nieta (bajar a piso ≥2 para encontrarla)",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+            ],
+            "states": [("Stranger", "mision_nieta")],
+        },
+        "nieta_obligada": {
+            "desc": "Nieta obligada en lobby + Stranger en mision_capturar_nieta",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_capturar_nieta_started",
+                "nieta_obligada",
+            ],
+            "states": [
+                ("Stranger", "mision_capturar_nieta"),
+                ("nieta", "obligada"),
+            ],
+        },
+        # ── NIETA: rama ayudar ────────────────────────────────────
+        "nieta_ayudando": {
+            "desc": "Nieta esperando en piso 1 + Stranger dando pociones",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_nieta_ayudar_started",
+                "nieta_ayudando",
+            ],
+            "states": [
+                ("Stranger", "mision_nieta_ayudar"),
+                ("nieta", "ayudando"),
+            ],
+        },
+        "stranger_indignado": {
+            "desc": "Stranger indignado en lobby (ir al lobby para hablarle)",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_nieta_ayudar_started",
+                "nieta_ayudando",
+                "stranger_indignado",
+            ],
+            "states": [
+                ("Stranger", "indignado"),
+                ("nieta", "ayudando"),
+            ],
+        },
+        "nieta_descubierta": {
+            "desc": "Nieta descubierta en piso 1 (bajar para hablarle)",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_nieta_ayudar_started",
+                "nieta_ayudando",
+                "stranger_indignado",
+            ],
+            "states": [
+                ("Stranger", "indignado"),
+                ("nieta", "descubierta"),
+            ],
+        },
+        "stranger_contratado": {
+            "desc": "Post-descubierta: Stranger con mercenario, nieta con diálogo corto",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_nieta_ayudar_started",
+                "nieta_ayudando",
+                "stranger_indignado",
+                "nieta_descubierta",
+            ],
+            "states": [
+                ("Stranger", "contratado_mercenario"),
+                ("nieta", "descubierta"),
+            ],
+        },
+        "nieta_veneno": {
+            "desc": "Igual que stranger_contratado + veneno en inventario",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_nieta_ayudar_started",
+                "nieta_ayudando",
+                "stranger_indignado",
+                "nieta_descubierta",
+            ],
+            "states": [
+                ("Stranger", "contratado_mercenario"),
+                ("nieta", "descubierta"),
+            ],
+            "items": ["poison_potion"],
+        },
+        "nieta_huida": {
+            "desc": "Post-veneno: nieta huye, Stranger desaparece (ambos en ningún sitio)",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_nieta_ayudar_started",
+                "nieta_ayudando",
+                "stranger_indignado",
+                "nieta_descubierta",
+                "nieta_veneno_entregado",
+            ],
+            "states": [
+                ("Stranger", "desaparecido"),
+                ("nieta", "huida"),
+            ],
+        },
+    }
+    
+    def _cmd_scenario(self, game: 'Game', args: List[str]) -> List[str]:
+        """Comando: scenario <nombre>"""
+        if not args:
+            messages = [
+                "=== ESCENARIOS DE TEST ===",
+                "Uso: scenario <nombre>",
+                "",
+            ]
+            for name, data in self.TEST_SCENARIOS.items():
+                messages.append(f"  {name:25} {data['desc']}")
+            messages.append("")
+            messages.append("Cada escenario configura eventos + estados de NPC de golpe.")
+            return messages
+        
+        scenario_name = args[0].lower()
+        
+        if scenario_name not in self.TEST_SCENARIOS:
+            return [
+                f"Escenario '{scenario_name}' no existe.",
+                "Escribe 'scenario' sin argumentos para ver la lista.",
+            ]
+        
+        scenario = self.TEST_SCENARIOS[scenario_name]
+        messages = [f"=== Cargando escenario: {scenario_name} ==="]
+        messages.append(f"  {scenario['desc']}")
+        messages.append("")
+        
+        from ..systems.events import event_manager
+        from ..systems.npc_states import npc_state_manager, StateCompletion
+        
+        # 1. Activar eventos
+        events_triggered = 0
+        for event_id in scenario.get("events", []):
+            if not event_manager.is_event_triggered(event_id):
+                result = event_manager.trigger_event(event_id, game.player, game.dungeon, skip_conditions=True)
+                if result:
+                    events_triggered += 1
+                else:
+                    messages.append(f"  ⚠ Evento '{event_id}' no se pudo activar (¿no registrado?)")
+        messages.append(f"  ✓ {events_triggered} eventos activados")
+        
+        # 2. Establecer estados de NPC
+        for npc_name, state_id in scenario.get("states", []):
+            # Marcar todos los estados previos del NPC como COMPLETED
+            all_states = npc_state_manager.get_all_npc_states(npc_name)
+            current = npc_state_manager.get_current_state(npc_name)
+            if current and current != state_id:
+                npc_state_manager.set_state_completion(npc_name, current, StateCompletion.COMPLETED)
+            
+            # Establecer nuevo estado
+            npc_state_manager.set_current_state(npc_name, state_id)
+            npc_state_manager.set_state_completion(npc_name, state_id, StateCompletion.IN_PROGRESS)
+            messages.append(f"  ✓ {npc_name} → estado '{state_id}'")
+        
+        # 3. Dar items al jugador
+        items_given = 0
+        for item_id in scenario.get("items", []):
+            try:
+                from ..items.item import create_item
+                item = create_item(item_id, x=game.player.x, y=game.player.y)
+                if item and len(game.player.inventory) < 26:
+                    game.player.inventory.append(item)
+                    items_given += 1
+            except Exception:
+                messages.append(f"  ⚠ No se pudo dar item '{item_id}'")
+        if items_given > 0:
+            messages.append(f"  ✓ {items_given} items añadidos al inventario")
+        
+        # 4. Eliminar NPCs actuales de la zona para forzar respawn limpio
+        npc_names_affected = {name for name, _ in scenario.get("states", [])}
+        zone = game.dungeon
+        removed = 0
+        for entity in list(zone.entities):
+            if entity.name in npc_names_affected and entity != game.player:
+                zone.entities.remove(entity)
+                removed += 1
+        # También limpiar del lobby si existe
+        if hasattr(game, '_lobby') and game._lobby:
+            for entity in list(game._lobby.entities):
+                if entity.name in npc_names_affected:
+                    game._lobby.entities.remove(entity)
+                    removed += 1
+        if removed > 0:
+            messages.append(f"  ✓ {removed} NPCs eliminados de zona (se respawnearán)")
+        
+        messages.append("")
+        messages.append("Escenario cargado. Cambia de zona para ver los NPCs actualizados.")
+        return messages
     
     def _cmd_help(self, _game: 'Game', _args: List[str]) -> List[str]:
         """Comando: help"""

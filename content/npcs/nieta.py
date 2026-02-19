@@ -119,6 +119,118 @@ def create_nieta_completed() -> InteractiveText:
     )
 
 
+def create_nieta_descubierta_dialog() -> DialogTree:
+    """
+    Crea el diálogo de la nieta cuando ha sido descubierta (Stranger entró en estado indignado).
+    Al completar este diálogo, Stranger pasa al estado contratado_mercenario.
+    
+    Returns:
+        DialogTree con el diálogo completo
+    """
+    tree = DialogTree(start_node="descubierta")
+    
+    def on_descubierta_complete(player, zone):
+        """Acción al completar el diálogo de descubierta: Stranger → contratado_mercenario."""
+        from roguelike.systems.events import event_manager
+        from roguelike.systems.npc_states import npc_state_manager, StateCompletion
+        
+        # Activar evento
+        if not event_manager.is_event_triggered("nieta_descubierta"):
+            event_manager.trigger_event("nieta_descubierta", player, zone, skip_conditions=True)
+        
+        # Cambiar estado del Stranger: indignado → contratado_mercenario
+        npc_state_manager.set_current_state("Stranger", "contratado_mercenario")
+        npc_state_manager.set_state_completion("Stranger", "indignado", StateCompletion.COMPLETED)
+        npc_state_manager.set_state_completion("Stranger", "contratado_mercenario", StateCompletion.IN_PROGRESS)
+    
+    descubierta_node = DialogNode(
+        node_id="descubierta",
+        speaker="nieta",
+        text="Le he visto por los pasillos. Se ha artado y me está buscando él mismo ¿O tal vez ha enviado a alguien a darme caza?---Sea lo que sea me persigue ¿Qué puedo hacer? No sé utilizar armas, no tengo con qué defenderme...",
+        options=[
+            DialogOption("Continuar", next_node=None, action=on_descubierta_complete)
+        ]
+    )
+    tree.add_node(descubierta_node)
+    
+    return tree
+
+
+def create_nieta_descubierta_completed():
+    """
+    Diálogo corto cuando el estado 'descubierta' está completado.
+    
+    Incluye opción condicional: si el jugador tiene una poción de veneno,
+    puede dársela a la nieta para defenderse. Al darle el veneno, continúa
+    el diálogo inmediatamente y al terminar ambos NPCs desaparecen.
+    
+    Returns:
+        InteractiveText con diálogo y opción condicional
+    """
+    tree = DialogTree(start_node="descubierta_short")
+    
+    def has_poison_potion(player) -> bool:
+        """Verifica si el jugador tiene una poción de veneno en el inventario."""
+        from roguelike.items.potion import Potion
+        for item in player.inventory:
+            if isinstance(item, Potion) and item.potion_type == "poison_potion":
+                return True
+        return False
+    
+    def on_give_poison(player, zone):
+        """Acción al dar la poción de veneno a la nieta: ambos NPCs desaparecen."""
+        from roguelike.systems.events import event_manager
+        from roguelike.systems.npc_states import npc_state_manager, StateCompletion
+        from roguelike.items.potion import Potion
+        
+        # Buscar y consumir la poción de veneno del inventario
+        for item in player.inventory:
+            if isinstance(item, Potion) and item.potion_type == "poison_potion":
+                player.inventory.remove(item)
+                break
+        
+        # Activar evento
+        event_manager.trigger_event("nieta_veneno_entregado", player, zone, skip_conditions=True)
+        
+        # Cambiar estado de nieta: descubierta → huida
+        npc_state_manager.set_current_state("nieta", "huida")
+        npc_state_manager.set_state_completion("nieta", "descubierta", StateCompletion.COMPLETED)
+        npc_state_manager.set_state_completion("nieta", "huida", StateCompletion.IN_PROGRESS)
+        
+        # Cambiar estado de Stranger: contratado_mercenario → desaparecido
+        npc_state_manager.set_current_state("Stranger", "desaparecido")
+        npc_state_manager.set_state_completion("Stranger", "contratado_mercenario", StateCompletion.COMPLETED)
+        npc_state_manager.set_state_completion("Stranger", "desaparecido", StateCompletion.IN_PROGRESS)
+    
+    descubierta_short_node = DialogNode(
+        node_id="descubierta_short",
+        speaker="nieta",
+        text="Estoy perdida, hay alguien buscándome por estos pasillos...",
+        options=[
+            DialogOption(
+                "Tengo este veneno, úsalo para defenderte",
+                next_node="veneno_response",
+                condition=has_poison_potion,
+            ),
+            DialogOption("Cerrar", next_node=None)
+        ]
+    )
+    tree.add_node(descubierta_short_node)
+    
+    # Nodo de respuesta al dar el veneno (continúa inmediatamente)
+    veneno_response_node = DialogNode(
+        node_id="veneno_response",
+        speaker="nieta",
+        text="Vaya, esto puede serme muy útil... Si consiguiera escabullirme...---Tal vez al anochecer...---Te estoy muy agradecida, el veneno me servirá.",
+        options=[
+            DialogOption("Continuar", next_node=None, action=on_give_poison)
+        ]
+    )
+    tree.add_node(veneno_response_node)
+    
+    return InteractiveText.create_dialog(tree, interaction_key="espacio")
+
+
 def create_nieta_obligada_dialog() -> DialogTree:
     """
     Crea el diálogo de la nieta cuando está obligada en el lobby.
@@ -207,6 +319,7 @@ def register_npc_states(manager) -> None:
         position=(45, 20),  # Cerca del Stranger pero separada
         dialog_tree_func=create_nieta_obligada_dialog,
         completed_dialog_func=create_nieta_obligada_completed,
+        completion_condition=lambda p, z: True,
         spawn_condition=lambda floor, evt_mgr: evt_mgr.is_event_triggered("nieta_obligada"),
         transitions=[
             StateTransition(
@@ -229,6 +342,10 @@ def register_npc_states(manager) -> None:
         """Condición de spawn para nieta ayudando: evento activado."""
         return evt_mgr.is_event_triggered("nieta_ayudando")
     
+    def check_descubierta_transition(player, zone):
+        """Verifica si la nieta debe pasar a 'descubierta' (Stranger entró en indignado)."""
+        return event_manager.is_event_triggered("stranger_indignado")
+    
     manager.register_npc_state("nieta", NPCStateConfig(
         state_id="ayudando",
         zone_type="dungeon",
@@ -236,5 +353,52 @@ def register_npc_states(manager) -> None:
         position=None,  # Posición aleatoria en el piso 1
         dialog_tree_func=None,  # Usa el diálogo corto directamente
         completed_dialog_func=create_nieta_completed,
+        completion_condition=lambda p, z: True,  # Se completa tras agotar el diálogo
         spawn_condition=nieta_ayudando_spawn_condition,
+        transitions=[
+            StateTransition(
+                target_state="descubierta",
+                condition=check_descubierta_transition,
+                description="Cuando Stranger entra en estado indignado"
+            )
+        ]
+    ))
+    
+    # Estado "descubierta" - Dungeon Piso 1, Stranger la ha descubierto
+    # Se llega por transición desde ayudando cuando stranger_indignado.
+    # Al completar el diálogo principal, Stranger pasa a contratado_mercenario.
+    # En el diálogo completado, si el jugador tiene veneno puede dárselo.
+    def nieta_descubierta_spawn_condition(floor: int, evt_mgr) -> bool:
+        """Condición de spawn para nieta descubierta: evento activado."""
+        return evt_mgr.is_event_triggered("stranger_indignado")
+    
+    def check_huida_transition(player, zone):
+        """Verifica si la nieta debe pasar a 'huida' (jugador le dio el veneno)."""
+        return event_manager.is_event_triggered("nieta_veneno_entregado")
+    
+    manager.register_npc_state("nieta", NPCStateConfig(
+        state_id="descubierta",
+        zone_type="dungeon",
+        floor=1,  # Solo en el piso 1
+        position=None,  # Posición aleatoria en el piso 1
+        dialog_tree_func=create_nieta_descubierta_dialog,
+        completed_dialog_func=create_nieta_descubierta_completed,
+        completion_condition=lambda p, z: event_manager.is_event_triggered("nieta_descubierta"),
+        spawn_condition=nieta_descubierta_spawn_condition,
+        transitions=[
+            StateTransition(
+                target_state="huida",
+                condition=check_huida_transition,
+                description="Cuando el jugador da el veneno a la nieta"
+            )
+        ]
+    ))
+    
+    # Estado "huida" - Nieta se escabulle con el veneno y desaparece
+    # zone_type=None hace que no spawnee en ninguna zona.
+    # Se llega por acción del diálogo de descubierta (dar veneno).
+    # Al mismo tiempo, Stranger pasa a estado 'desaparecido'.
+    manager.register_npc_state("nieta", NPCStateConfig(
+        state_id="huida",
+        zone_type=None,  # No aparece en ninguna zona
     ))

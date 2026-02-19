@@ -1,5 +1,10 @@
 """
 Clase Armor - Armaduras equipables con sistema de durabilidad.
+
+La durabilidad representa la vida de la armadura: un número entero de usos.
+Cada ataque recibido confirmado (no fallo) consume exactamente 1 punto de vida.
+Cuando la vida llega a 0, la armadura se rompe.
+Mientras no esté rota, el bonus de defensa se aplica íntegramente.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING, Dict, Any, List
@@ -13,13 +18,13 @@ if TYPE_CHECKING:
 
 class Armor(Item):
     """
-    Representa una armadura equipable con durabilidad.
+    Representa una armadura equipable con durabilidad basada en usos.
     
     Attributes:
-        armor_type: Tipo de armadura
-        defense_bonus: Bonificación a la defensa
-        durability: Durabilidad actual (0-100%)
-        max_durability: Durabilidad máxima
+        armor_type: Tipo de armadura (clave en ARMOR_DATA)
+        defense_bonus: Bonificación a la defensa (constante mientras no esté rota)
+        durability: Vida actual de la armadura (golpes restantes)
+        max_durability: Vida máxima de la armadura
     """
     
     def __init__(
@@ -29,7 +34,7 @@ class Armor(Item):
         armor_type: str = "leather_armor",
         name: str = "Armadura de Cuero",
         defense_bonus: int = 2,
-        durability: int = 100
+        durability: int = 6
     ) -> None:
         """
         Inicializa una armadura.
@@ -40,7 +45,7 @@ class Armor(Item):
             armor_type: Tipo de armadura
             name: Nombre
             defense_bonus: Bonificación de defensa
-            durability: Durabilidad inicial (0-100%)
+            durability: Vida inicial (número de golpes antes de romperse)
         """
         super().__init__(
             x=x,
@@ -57,53 +62,39 @@ class Armor(Item):
         self.armor_type = armor_type
         self.defense_bonus = defense_bonus
         self.durability = durability
-        self.max_durability = 100
+        self.max_durability = durability
     
-    def take_damage(self, damage_received: int) -> int:
+    def take_hit(self) -> int:
         """
-        Reduce la durabilidad de la armadura al recibir daño.
+        Registra un golpe recibido (1 ataque confirmado contra el portador).
         
-        La durabilidad se reduce proporcionalmente al daño recibido.
-        Armaduras más fuertes se gastan más lento.
+        Reduce la vida de la armadura en exactamente 1 punto.
+        Solo debe llamarse cuando el ataque conecta (no en fallos).
         
-        Args:
-            damage_received: Daño que recibió el jugador
-            
         Returns:
-            Nueva durabilidad
+            Vida restante de la armadura
         """
-        # Desgaste base: 2-5% por golpe, reducido por calidad de armadura
-        # Armaduras con más defensa se gastan más lento
-        base_wear = max(2, 6 - self.defense_bonus // 2)
-        
-        # Añadir algo de variación
-        import random
-        wear = base_wear + random.randint(-1, 1)
-        wear = max(1, wear)
-        
-        self.durability = max(0, self.durability - wear)
+        self.durability = max(0, self.durability - 1)
         return self.durability
     
     def is_broken(self) -> bool:
-        """Verifica si la armadura está rota."""
+        """Verifica si la armadura está rota (vida = 0)."""
         return self.durability <= 0
     
     def get_effective_defense(self) -> int:
         """
-        Retorna la defensa efectiva según la durabilidad.
+        Retorna la defensa efectiva de la armadura.
         
-        A menor durabilidad, menor defensa efectiva.
+        Mientras la armadura tenga vida, el bonus es completo.
+        Si está rota, el bonus es 0.
         """
-        if self.durability <= 0:
+        if self.is_broken():
             return 0
-        # La defensa se reduce proporcionalmente a la durabilidad
-        # pero mantiene al menos 1 si no está rota
-        effective = int(self.defense_bonus * (self.durability / 100))
-        return max(1, effective) if self.durability > 0 else 0
+        return self.defense_bonus
     
     def get_description(self) -> str:
         """Retorna la descripción de la armadura."""
-        return f"{self.name} (+{self.defense_bonus} DEF, {self.durability}%)"
+        return f"{self.name} (+{self.defense_bonus} DEF, {self.durability}/{self.max_durability})"
     
     def to_dict(self) -> Dict[str, Any]:
         """Serializa la armadura."""
@@ -112,6 +103,7 @@ class Armor(Item):
             "armor_type": self.armor_type,
             "defense_bonus": self.defense_bonus,
             "durability": self.durability,
+            "max_durability": self.max_durability,
         })
         return data
     
@@ -124,7 +116,9 @@ class Armor(Item):
             armor_type=data.get("armor_type", "leather_armor"),
             name=data["name"],
             defense_bonus=data.get("defense_bonus", 2),
-            durability=data.get("durability", 100)
+            durability=data.get("durability", 6)
         )
+        # Restaurar max_durability desde el save; fallback a durability actual
+        armor.max_durability = data.get("max_durability", armor.durability)
         armor.persistent = data.get("persistent", False)
         return armor
