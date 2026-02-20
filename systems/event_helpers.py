@@ -262,8 +262,7 @@ def action_give_item_to_player(item_factory: Callable[[], 'Item']) -> EventActio
     """
     def action(player: Player, _zone: Zone) -> None:
         item = item_factory()
-        if len(player.inventory) < 26:  # Capacidad del inventario
-            player.inventory.append(item)
+        player.add_to_inventory(item)  # Auto-place en el grid
     
     return EventAction(action, "Dar item al jugador")
 

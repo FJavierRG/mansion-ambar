@@ -189,7 +189,7 @@ def create_nieta_descubierta_completed():
         # Buscar y consumir la poción de veneno del inventario
         for item in player.inventory:
             if isinstance(item, Potion) and item.potion_type == "poison_potion":
-                player.inventory.remove(item)
+                player.remove_from_inventory(item)
                 break
         
         # Activar evento

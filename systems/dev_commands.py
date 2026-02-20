@@ -302,11 +302,10 @@ class DevCommandManager:
                 available = ", ".join(get_all_item_ids())
                 return [f"Item desconocido: {item_id}", f"IDs válidos: {available}"]
             
-            if len(game.player.inventory) < 26:
-                game.player.inventory.append(item)
+            if game.player.add_to_inventory(item):
                 return [f"Item '{item.name}' añadido al inventario."]
             else:
-                return ["Inventario lleno."]
+                return ["Inventario lleno (no cabe en el grid)."]
         except Exception as e:
             return [f"Error: {e}"]
     
@@ -426,12 +425,11 @@ class DevCommandManager:
             return ["Ya tienes el Amuleto de Ámbar."]
         
         amulet = create_item("amulet", x=game.player.x, y=game.player.y)
-        if len(game.player.inventory) < 26:
-            game.player.inventory.append(amulet)
+        if game.player.add_to_inventory(amulet):
             game.player.has_amulet = True
             return ["Amuleto de Ámbar añadido al inventario."]
         else:
-            return ["Inventario lleno."]
+            return ["Inventario lleno (no cabe en el grid)."]
     
     def _cmd_clear(self, game: 'Game', _args: List[str]) -> List[str]:
         """Comando: clear"""
@@ -1181,8 +1179,8 @@ class DevCommandManager:
             try:
                 from ..items.item import create_item
                 item = create_item(item_id, x=game.player.x, y=game.player.y)
-                if item and len(game.player.inventory) < 26:
-                    game.player.inventory.append(item)
+                if item and game.player.add_to_inventory(item):
+                    pass  # item añadido al grid
                     items_given += 1
             except Exception:
                 messages.append(f"  ⚠ No se pudo dar item '{item_id}'")

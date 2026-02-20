@@ -11,6 +11,7 @@ from ..config import (
     PLAYER_HP_PER_LEVEL, PLAYER_ATTACK_PER_LEVEL, PLAYER_DEFENSE_PER_LEVEL,
     XP_BASE, XP_FACTOR, SYMBOLS, INVENTORY_CAPACITY
 )
+from ..systems.inventory import GridInventory
 
 if TYPE_CHECKING:
     from ..world.dungeon import Dungeon
@@ -25,7 +26,8 @@ class Player(Entity):
     
     Attributes:
         fighter: Componente de combate
-        inventory: Lista de items
+        grid_inventory: Inventario basado en grid (GridInventory)
+        inventory: Propiedad que retorna la lista de items del grid
         equipped: Diccionario de items equipados
         gold: Oro acumulado
         current_floor: Piso actual de la mazmorra
@@ -66,8 +68,8 @@ class Player(Entity):
             level=1
         )
         
-        # Inventario y equipamiento
-        self.inventory: List[Item] = []
+        # Inventario grid y equipamiento
+        self.grid_inventory: GridInventory = GridInventory()
         self.equipped: Dict[str, Optional[Item]] = {
             "weapon": None,
             "armor": None,
@@ -80,6 +82,16 @@ class Player(Entity):
         self.current_floor: int = 1
         self.total_xp: int = 0
         self.has_amulet: bool = False
+    
+    @property
+    def inventory(self) -> List[Item]:
+        """
+        Lista de items en el inventario (vista del grid, ordenados por posición).
+        
+        Propiedad de solo lectura para compatibilidad con código legacy.
+        Para modificar el inventario usar add_to_inventory / remove_from_inventory.
+        """
+        return self.grid_inventory.get_all_items()
     
     @property
     def attack(self) -> int:
@@ -164,22 +176,21 @@ class Player(Entity):
     
     def add_to_inventory(self, item: Item) -> bool:
         """
-        Añade un item al inventario.
+        Añade un item al inventario (grid).
+        
+        Busca la primera posición disponible en el grid.
         
         Args:
             item: Item a añadir
             
         Returns:
-            True si se pudo añadir, False si el inventario está lleno
+            True si se pudo añadir, False si no cabe
         """
-        if len(self.inventory) >= INVENTORY_CAPACITY:
-            return False
-        self.inventory.append(item)
-        return True
+        return self.grid_inventory.auto_place(item)
     
     def remove_from_inventory(self, item: Item) -> bool:
         """
-        Elimina un item del inventario.
+        Elimina un item del inventario (grid).
         
         Args:
             item: Item a eliminar
@@ -187,10 +198,7 @@ class Player(Entity):
         Returns:
             True si se eliminó, False si no estaba
         """
-        if item in self.inventory:
-            self.inventory.remove(item)
-            return True
-        return False
+        return self.grid_inventory.remove(item)
     
     def get_persistent_items(self) -> List[Item]:
         """
@@ -212,7 +220,12 @@ class Player(Entity):
             Lista de items persistentes que se conservaron
         """
         persistent = self.get_persistent_items()
-        self.inventory = persistent.copy()
+        
+        # Vaciar el grid y re-colocar solo los persistentes
+        self.grid_inventory.clear()
+        for item in persistent:
+            self.grid_inventory.auto_place(item)
+        
         # Limpiar equipo (armas y armaduras no son persistentes por defecto)
         for slot in self.equipped:
             item = self.equipped[slot]
@@ -225,14 +238,12 @@ class Player(Entity):
         Obtiene un item del inventario por índice.
         
         Args:
-            index: Índice del item (0-25 para a-z)
+            index: Índice del item (0-based en la lista ordenada del grid)
             
         Returns:
             El item o None si el índice es inválido
         """
-        if 0 <= index < len(self.inventory):
-            return self.inventory[index]
-        return None
+        return self.grid_inventory.get_item_by_index(index)
     
     def equip(self, item: Item) -> List[str]:
         """
@@ -319,7 +330,7 @@ class Player(Entity):
             "current_floor": self.current_floor,
             "total_xp": self.total_xp,
             "has_amulet": self.has_amulet,
-            "inventory": [item.to_dict() for item in self.inventory],
+            "grid_inventory": self.grid_inventory.to_dict(),
             "equipped": {
                 slot: (item.to_dict() if item else None)
                 for slot, item in self.equipped.items()
@@ -330,6 +341,8 @@ class Player(Entity):
     def from_dict(cls, data: Dict[str, Any], dungeon: Optional[Dungeon] = None) -> Player:
         """
         Crea un jugador desde un diccionario.
+        
+        Soporta saves nuevos (grid_inventory) y legacy (inventory como lista).
         
         Args:
             data: Diccionario con los datos
@@ -356,14 +369,37 @@ class Player(Entity):
         player.total_xp = data["total_xp"]
         player.has_amulet = data["has_amulet"]
         
-        # Restaurar inventario
-        for item_data in data["inventory"]:
-            item = Item.from_dict(item_data)
-            player.inventory.append(item)
+        # Restaurar inventario — nuevo formato (grid) o legacy (lista)
+        if "grid_inventory" in data:
+            player.grid_inventory = GridInventory.from_dict(data["grid_inventory"])
+        elif "inventory" in data:
+            # Legacy: convertir lista a grid
+            legacy_items = [Item.from_dict(item_data) for item_data in data["inventory"]]
+            player.grid_inventory = GridInventory.from_item_list(legacy_items)
         
         # Restaurar equipo
+        # En el grid, los items equipados siguen estando en el grid.
+        # Solo necesitamos vincular las referencias del equipo a los items del grid.
         for slot, item_data in data["equipped"].items():
             if item_data:
-                player.equipped[slot] = Item.from_dict(item_data)
+                equipped_item = Item.from_dict(item_data)
+                # Buscar si el item ya existe en el grid (por nombre y tipo)
+                # Si no, añadirlo al grid
+                matched = False
+                for grid_item in player.grid_inventory.get_all_items():
+                    if (grid_item.name == equipped_item.name and 
+                            grid_item.item_type == equipped_item.item_type and
+                            grid_item not in [v for v in player.equipped.values() if v]):
+                        player.equipped[slot] = grid_item
+                        matched = True
+                        break
+                
+                if not matched:
+                    # El item equipado no está en el grid — añadirlo
+                    if player.grid_inventory.auto_place(equipped_item):
+                        player.equipped[slot] = equipped_item
+                    else:
+                        # No cabe en el grid; equipar sin grid (edge case)
+                        player.equipped[slot] = equipped_item
         
         return player

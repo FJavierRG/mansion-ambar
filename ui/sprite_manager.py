@@ -4,7 +4,7 @@ Carga y maneja sprites PNG para criaturas e items.
 """
 from __future__ import annotations
 import os
-from typing import Dict, Generator, Optional, Tuple
+from typing import Dict, Generator, List, Optional, Tuple
 import pygame
 
 from ..config import TILE_SIZE
@@ -47,11 +47,23 @@ class SpriteManager:
     # Sprites de decoración del suelo (sangre, etc.)
     DECORATION_SPRITES: Dict[str, str] = {
         "blood": "blood.png",
+        "ventanas": "ventanas.png",
+    }
+    
+    # Sprites de decoración animada (múltiples frames)
+    # Cada entrada mapea un nombre a una lista de archivos ordenados por frame.
+    ANIMATED_DECORATION_SPRITES: Dict[str, list] = {
+        "hoguera": ["hoguera_1.png", "hoguera_2.png", "hoguera_3.png"],
     }
     
     # Sprites que NO deben escalarse a TILE_SIZE (mantienen su tamaño original)
     NO_SCALE_CREATURES: set = {
         "comerciante",
+    }
+    
+    # Decoraciones que NO deben escalarse a TILE_SIZE (mantienen su tamaño original)
+    NO_SCALE_DECORATIONS: set = {
+        "ventanas",
     }
     
     # Mapeo de terreno especial (escaleras, puertas)
@@ -77,6 +89,7 @@ class SpriteManager:
         "sword": "sword.png",
         "axe": "axe.png",           # También cubre martillos
         "spear": "spear.png",
+        "llave_corazon": "llave_corazon.png",
     }
     
     def __init__(self) -> None:
@@ -85,6 +98,7 @@ class SpriteManager:
         self._item_cache: Dict[str, pygame.Surface] = {}
         self._terrain_cache: Dict[str, pygame.Surface] = {}
         self._decoration_cache: Dict[str, pygame.Surface] = {}
+        self._animated_decoration_cache: Dict[str, List[pygame.Surface]] = {}
         self._loaded = False
         
         # Ruta base a los sprites
@@ -129,9 +143,15 @@ class SpriteManager:
             all_assets.append(("terrain", terrain_type, filename, True))
         
         for deco_type, filename in self.DECORATION_SPRITES.items():
-            all_assets.append(("decoration", deco_type, filename, True))
+            scale = deco_type not in self.NO_SCALE_DECORATIONS
+            all_assets.append(("decoration", deco_type, filename, scale))
         
-        total = len(all_assets)
+        # Contar frames de decoraciones animadas
+        animated_frame_count = sum(
+            len(frames) for frames in self.ANIMATED_DECORATION_SPRITES.values()
+        )
+        
+        total = len(all_assets) + animated_frame_count
         
         for i, (category, key, filename, scale) in enumerate(all_assets):
             # Determinar la carpeta según la categoría
@@ -156,11 +176,25 @@ class SpriteManager:
             
             yield (i + 1, total, key)
         
+        # Cargar decoraciones animadas (múltiples frames por tipo)
+        loaded_count = len(all_assets)
+        for anim_type, frame_files in self.ANIMATED_DECORATION_SPRITES.items():
+            frames: List[pygame.Surface] = []
+            for frame_file in frame_files:
+                loaded_count += 1
+                sprite = self._load_sprite(self._decoration_path, frame_file, scale=True)
+                if sprite:
+                    frames.append(sprite)
+                yield (loaded_count, total, f"{anim_type} (frame)")
+            if frames:
+                self._animated_decoration_cache[anim_type] = frames
+        
         self._loaded = True
         print(f"[SpriteManager] Cargados {len(self._creature_cache)} sprites de criaturas")
         print(f"[SpriteManager] Cargados {len(self._item_cache)} sprites de items")
         print(f"[SpriteManager] Cargados {len(self._terrain_cache)} sprites de terreno")
         print(f"[SpriteManager] Cargados {len(self._decoration_cache)} sprites de decoración")
+        print(f"[SpriteManager] Cargados {len(self._animated_decoration_cache)} decoraciones animadas")
     
     def _load_creature_sprite(self, creature_type: str, filename: str, scale: bool = True) -> Optional[pygame.Surface]:
         """
@@ -291,6 +325,26 @@ class SpriteManager:
         if not self._loaded:
             self.load_sprites()
         return self._decoration_cache.get(deco_type)
+    
+    def get_animated_decoration_frames(self, deco_type: str) -> Optional[List[pygame.Surface]]:
+        """
+        Obtiene la lista de frames de una decoración animada.
+        
+        Args:
+            deco_type: Tipo de decoración animada (ej: "hoguera")
+            
+        Returns:
+            Lista de Surfaces (frames) o None si no existe
+        """
+        if not self._loaded:
+            self.load_sprites()
+        return self._animated_decoration_cache.get(deco_type)
+    
+    def is_animated_decoration(self, deco_type: str) -> bool:
+        """Verifica si una decoración es animada (tiene múltiples frames)."""
+        if not self._loaded:
+            self.load_sprites()
+        return deco_type in self._animated_decoration_cache
 
 
 # Instancia global del gestor de sprites

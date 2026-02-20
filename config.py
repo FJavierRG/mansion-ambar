@@ -57,40 +57,74 @@ FLOOR_ROOM_COUNT: Dict[int, Tuple[int, int]] = {
 }
 FLOOR_ROOM_COUNT_DEFAULT: Tuple[int, int] = (8, 9)  # Planta 7 en adelante
 
-# --- Progresión de ítems de combate por planta (min, max) ---
-# Pool de combate: pociones, armas, armaduras.
-# Filosofía roguelike: pocos ítems, cada uno es una decisión importante.
-# Las plantas no listadas usan FLOOR_COMBAT_ITEMS_DEFAULT.
-FLOOR_COMBAT_ITEMS: Dict[int, Tuple[int, int]] = {
-    1:  (1, 1),   # Un solo ítem — cada hallazgo cuenta
-    2:  (2, 2),   # Ligera mejora
-    3:  (3, 3),   # El jugador ya gestiona recursos
-    4:  (3, 4),   # Dificultad media, algo más de variedad
-    5:  (3, 4),
-    6:  (3, 4),
-    7:  (4, 5),   # Plantas altas: más salas, algo más de loot
-    8:  (4, 5),
-    9:  (4, 5),
-    10: (3, 3),   # Planta del boss: reto de recursos, no de loot fresco
+# --- Margen de colocación de salas por planta (margin_x, margin_y) ---
+# Reduce el área efectiva del mapa para concentrar salas en pisos con pocas.
+# Área útil real = (MAP_WIDTH - 2*mx) × (MAP_HEIGHT - 2*my).
+# Pisos no listados usan FLOOR_MAP_MARGIN_DEFAULT (sin margen extra).
+FLOOR_MAP_MARGIN: Dict[int, Tuple[int, int]] = {
+    1: (12, 4),  # Área efectiva ~56×30 — salas muy concentradas
+    2: (8, 3),   # Área efectiva ~64×32
+    3: (4, 2),   # Área efectiva ~72×34
 }
-FLOOR_COMBAT_ITEMS_DEFAULT: Tuple[int, int] = (4, 5)
+FLOOR_MAP_MARGIN_DEFAULT: Tuple[int, int] = (0, 0)  # Sin margen extra
 
-# --- Progresión de oro por planta (min, max) ---
-# Pool separado: el oro sobrevive entre runs (recurso meta-progresión).
-# Las plantas no listadas usan FLOOR_GOLD_ITEMS_DEFAULT.
-FLOOR_GOLD_ITEMS: Dict[int, Tuple[int, int]] = {
-    1:  (1, 1),
-    2:  (1, 2),
-    3:  (1, 2),
-    4:  (2, 2),
-    5:  (2, 2),
-    6:  (2, 2),
-    7:  (2, 3),
-    8:  (2, 3),
-    9:  (2, 3),
-    10: (2, 2),
+# --- Probabilidad base de spawn por pool ---
+# Primer filtro: ¿aparece esta pool en esta planta?
+# Valor fijo por ahora. Preparado para extender a per-piso/eventos.
+POOL_SPAWN_CHANCE: Dict[str, float] = {
+    "equipment": 0.70,  # Armas y armaduras
+    "potion":    0.30,  # Pociones
+    "gold":      0.80,  # Monedas
 }
-FLOOR_GOLD_ITEMS_DEFAULT: Tuple[int, int] = (2, 3)
+
+# --- Rangos de cantidad por pool (si la pool aparece) ---
+# min ≥ 1 siempre: el caso "0 items" lo decide POOL_SPAWN_CHANCE.
+# Filosofía roguelike: pocos ítems, cada uno es una decisión importante.
+
+# Pool de equipo: armas y armaduras.  Techo: 3.
+FLOOR_EQUIPMENT_RANGE: Dict[int, Tuple[int, int]] = {
+    1:  (1, 1),   # Un solo hallazgo — cada pieza cuenta
+    2:  (1, 1),
+    3:  (1, 2),
+    4:  (1, 2),
+    5:  (1, 2),
+    6:  (1, 3),
+    7:  (1, 3),
+    8:  (2, 3),   # Plantas altas: equipo más generoso
+    9:  (2, 3),
+    10: (1, 2),   # Planta del boss: reto de recursos
+}
+FLOOR_EQUIPMENT_RANGE_DEFAULT: Tuple[int, int] = (1, 3)
+
+# Pool de pociones: consumibles curativos/buff.  Techo: 3.
+FLOOR_POTION_RANGE: Dict[int, Tuple[int, int]] = {
+    1:  (1, 1),
+    2:  (1, 1),
+    3:  (1, 1),
+    4:  (1, 2),
+    5:  (1, 2),
+    6:  (1, 2),
+    7:  (1, 2),
+    8:  (1, 3),
+    9:  (1, 3),
+    10: (1, 1),   # Boss: recursos justos
+}
+FLOOR_POTION_RANGE_DEFAULT: Tuple[int, int] = (1, 2)
+
+# Pool de oro: monedas (recurso meta-progresión).  Techo: 5.
+FLOOR_GOLD_RANGE: Dict[int, Tuple[int, int]] = {
+    1:  (1, 2),
+    2:  (1, 2),
+    3:  (1, 3),
+    4:  (1, 3),
+    5:  (2, 3),
+    6:  (2, 4),
+    7:  (2, 4),
+    8:  (2, 5),
+    9:  (2, 5),
+    10: (2, 3),
+}
+FLOOR_GOLD_RANGE_DEFAULT: Tuple[int, int] = (2, 4)
 
 # Probabilidad de que una habitación tenga puertas en todas sus entradas
 DOOR_CHANCE: float = 0.3
@@ -118,9 +152,12 @@ XP_BASE: int = 20
 XP_FACTOR: float = 1.5
 
 # ============================================================================
-# INVENTARIO
+# INVENTARIO (Grid estilo RE4 / Tarkov)
 # ============================================================================
-INVENTORY_CAPACITY: int = 26  # a-z
+INVENTORY_CAPACITY: int = 26  # Legacy (fallback)
+GRID_INVENTORY_WIDTH: int = 4    # Columnas del grid (ancho)
+GRID_INVENTORY_HEIGHT: int = 3   # Filas del grid (alto)
+GRID_CELL_SIZE: int = 48          # Píxeles por celda en la UI
 
 # ============================================================================
 # SÍMBOLOS ASCII
@@ -368,6 +405,8 @@ POTION_DATA: Dict[str, Dict] = {
         "value": 20,
         "color": "potion",
         "rarity": 0.5,
+        "grid_size": (1, 1),
+        "description": "Un líquido rojizo con propiedades curativas.",
     },
     "greater_health_potion": {
         "name": "Poción de Vida Mayor",
@@ -375,6 +414,8 @@ POTION_DATA: Dict[str, Dict] = {
         "value": 50,
         "color": "potion",
         "rarity": 0.05,
+        "grid_size": (1, 1),
+        "description": "Una poción potente que restaura gran cantidad de vida.",
     },
     "strength_potion": {
         "name": "Poción de Fuerza",
@@ -383,6 +424,8 @@ POTION_DATA: Dict[str, Dict] = {
         "duration": 20,
         "color": "potion",
         "rarity": 0.1,
+        "grid_size": (1, 1),
+        "description": "Un brebaje que otorga fuerza temporal.",
     },
     "poison_potion": {
         "name": "Poción de Veneno",
@@ -390,6 +433,8 @@ POTION_DATA: Dict[str, Dict] = {
         "value": -25,
         "color": "potion",
         "rarity": 0.25,
+        "grid_size": (1, 1),
+        "description": "Un líquido de color sospechoso...",
     },
 }
 
@@ -402,6 +447,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 1.0,
         "min_level": 2,
+        "grid_size": (1, 2),
+        "description": "Una pequeña daga de bronce, modesta pero funcional.",
     },
     "dagger": {
         "name": "Daga",
@@ -411,6 +458,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 1.0,
         "min_level": 2,
+        "grid_size": (1, 2),
+        "description": "Una daga afilada, perfecta para ataques rápidos.",
     },
     "holy_dagger": {
         "name": "Daga Sagrada",
@@ -420,6 +469,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 0.2,
         "min_level": 2,
+        "grid_size": (1, 2),
+        "description": "Una daga bendecida que emana una tenue luz dorada.",
     },
     "short_sword": {
         "name": "Espada corta",
@@ -429,6 +480,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 0.8,
         "min_level": 3,
+        "grid_size": (1, 2),
+        "description": "Una espada ligera y versátil.",
     },
     "bronze_hammer": {
         "name": "Martillo de bronce",
@@ -438,6 +491,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 0.8,
         "min_level": 3,
+        "grid_size": (1, 2),
+        "description": "Un martillo pesado forjado en bronce.",
     },
     "hammer": {
         "name": "Martillo",
@@ -447,6 +502,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 0.8,
         "min_level": 3,
+        "grid_size": (1, 2),
+        "description": "Un martillo de acero bien equilibrado.",
     },
     "long_sword": {
         "name": "Espada larga",
@@ -456,6 +513,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 0.5,
         "min_level": 4,
+        "grid_size": (1, 3),
+        "description": "Una espada larga con hoja de acero templado.",
     },
     "war_axe": {
         "name": "Hacha de guerra",
@@ -465,6 +524,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 0.5,
         "min_level": 4,
+        "grid_size": (2, 2),
+        "description": "Un hacha de guerra devastadora.",
     },
     "lance": {
         "name": "Lanza",
@@ -474,6 +535,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 0.3,
         "min_level": 4,
+        "grid_size": (1, 4),
+        "description": "Una lanza larga con punta de acero. Frágil pero letal.",
     },
     "dragon_lance": {
         "name": "Lanza Dragontina",
@@ -483,6 +546,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 0.2,
         "min_level": 4,
+        "grid_size": (1, 4),
+        "description": "Forjada con escamas de dragón. Poderosa pero frágil.",
     },
     "commander_sword": {
         "name": "Espada de comandante",
@@ -492,6 +557,8 @@ WEAPON_DATA: Dict[str, Dict] = {
         "color": "weapon",
         "rarity": 0.5,
         "min_level": 4,
+        "grid_size": (1, 3),
+        "description": "La espada de un comandante caído. Resistente y poderosa.",
     },
 }
 
@@ -503,6 +570,8 @@ ARMOR_DATA: Dict[str, Dict] = {
         "color": "armor",
         "rarity": 1.0,
         "min_level": 1,
+        "grid_size": (2, 2),
+        "description": "Armadura ligera de cuero curtido.",
     },
     "chain_mail": {
         "name": "Cota de Mallas",
@@ -511,22 +580,28 @@ ARMOR_DATA: Dict[str, Dict] = {
         "color": "armor",
         "rarity": 0.6,
         "min_level": 3,
+        "grid_size": (2, 3),
+        "description": "Una cota de mallas que ofrece buena protección.",
     },
     "plate_armor": {
         "name": "Armadura de Placas",
         "defense_bonus": 7,
-        "durability": 16,
+        "durability": 14,
         "color": "armor",
         "rarity": 0.3,
         "min_level": 6,
+        "grid_size": (2, 3),
+        "description": "Armadura pesada de placas de acero. Gran protección.",
     },
     "dragon_armor": {
         "name": "Armadura de Dragón",
         "defense_bonus": 12,
-        "durability": 25,
+        "durability": 17,
         "color": "armor",
         "rarity": 0.1,
         "min_level": 9,
+        "grid_size": (3, 3),
+        "description": "Forjada con escamas de dragón. La mejor protección posible.",
     },
 }
 

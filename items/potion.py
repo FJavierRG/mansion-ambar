@@ -143,4 +143,7 @@ class Potion(Item):
         )
         potion.identified = data.get("identified", True)
         potion.persistent = data.get("persistent", False)
+        potion.grid_width = data.get("grid_width", 1)
+        potion.grid_height = data.get("grid_height", 1)
+        potion.description = data.get("description", "")
         return potion

@@ -48,7 +48,11 @@ class Amulet(Item):
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> Amulet:
         """Crea un amuleto desde un diccionario."""
-        return cls(x=data["x"], y=data["y"])
+        amulet = cls(x=data["x"], y=data["y"])
+        amulet.grid_width = data.get("grid_width", 1)
+        amulet.grid_height = data.get("grid_height", 1)
+        amulet.description = data.get("description", "El legendario Amuleto de Ámbar. ¡Escapa con él!")
+        return amulet
 
 
 class Gold(Item):
@@ -92,4 +96,8 @@ class Gold(Item):
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> Gold:
         """Crea oro desde un diccionario."""
-        return cls(x=data["x"], y=data["y"], amount=data.get("value", 1))
+        gold = cls(x=data["x"], y=data["y"], amount=data.get("value", 1))
+        gold.grid_width = data.get("grid_width", 1)
+        gold.grid_height = data.get("grid_height", 1)
+        gold.description = data.get("description", "Una moneda de oro.")
+        return gold

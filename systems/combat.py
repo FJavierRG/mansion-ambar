@@ -193,8 +193,7 @@ class Combat:
                 from ..systems.music import music_manager
                 music_manager.play_sound("broken_equip.mp3")
                 attacker.equipped["weapon"] = None
-                if weapon in attacker.inventory:
-                    attacker.inventory.remove(weapon)
+                attacker.remove_from_inventory(weapon)
             elif weapon.durability == 1:
                 messages.append(
                     f"Tu {weapon.name} está a punto de romperse "
@@ -220,8 +219,7 @@ class Combat:
                 from ..systems.music import music_manager
                 music_manager.play_sound("broken_equip.mp3")
                 defender.equipped["armor"] = None
-                if armor in defender.inventory:
-                    defender.inventory.remove(armor)
+                defender.remove_from_inventory(armor)
             elif armor.durability == 1:
                 messages.append(
                     f"Tu {armor.name} está a punto de romperse "

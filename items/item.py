@@ -27,6 +27,9 @@ class Item:
         slot: Slot de equipamiento (si aplica)
         persistent: Si el item persiste al morir (items especiales de misión)
         sprite: Clave de sprite específico (si aplica, ej: "dagger", "sword")
+        grid_width: Ancho del item en celdas del inventario grid
+        grid_height: Alto del item en celdas del inventario grid
+        description: Descripción del item (se muestra en tooltip)
     """
     
     def __init__(
@@ -73,6 +76,11 @@ class Item:
         self.attack_bonus = 0
         self.defense_bonus = 0
         self.value = 0
+        
+        # Propiedades del inventario grid (dimensiones y descripción)
+        self.grid_width: int = 1
+        self.grid_height: int = 1
+        self.description: str = ""
     
     def use(self, player: Player) -> Tuple[List[str], bool]:
         """
@@ -105,12 +113,16 @@ class Item:
             "attack_bonus": self.attack_bonus,
             "defense_bonus": self.defense_bonus,
             "value": self.value,
+            "grid_width": self.grid_width,
+            "grid_height": self.grid_height,
         }
         # Solo serializar persistent si es True (para no romper saves existentes)
         if self.persistent:
             data["persistent"] = True
         if self.sprite:
             data["sprite"] = self.sprite
+        if self.description:
+            data["description"] = self.description
         return data
     
     @classmethod
@@ -151,6 +163,9 @@ class Item:
             item.defense_bonus = data.get("defense_bonus", 0)
             item.value = data.get("value", 0)
             item.sprite = data.get("sprite")
+            item.grid_width = data.get("grid_width", 1)
+            item.grid_height = data.get("grid_height", 1)
+            item.description = data.get("description", "")
             return item
     
     def __repr__(self) -> str:
@@ -210,10 +225,18 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
     from .armor import Armor
     from .special import Gold, Amulet
     
+    # Función helper para aplicar dimensiones y descripción desde config
+    def _apply_grid_props(item_obj: Item, data_dict: Dict) -> Item:
+        gs = data_dict.get("grid_size", (1, 1))
+        item_obj.grid_width = gs[0]
+        item_obj.grid_height = gs[1]
+        item_obj.description = data_dict.get("description", "")
+        return item_obj
+    
     # --- Pociones ---
     if item_id in POTION_DATA:
         data = POTION_DATA[item_id]
-        return Potion(
+        potion = Potion(
             x=x, y=y,
             potion_type=item_id,
             name=data["name"],
@@ -221,11 +244,12 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
             value=data["value"],
             duration=data.get("duration", 0)
         )
+        return _apply_grid_props(potion, data)
     
     # --- Armas ---
     if item_id in WEAPON_DATA:
         data = WEAPON_DATA[item_id]
-        return Weapon(
+        weapon = Weapon(
             x=x, y=y,
             weapon_type=item_id,
             name=data["name"],
@@ -233,17 +257,19 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
             durability=data["durability"],
             sprite_key=data.get("sprite")
         )
+        return _apply_grid_props(weapon, data)
     
     # --- Armaduras ---
     if item_id in ARMOR_DATA:
         data = ARMOR_DATA[item_id]
-        return Armor(
+        armor = Armor(
             x=x, y=y,
             armor_type=item_id,
             name=data["name"],
             defense_bonus=data["defense_bonus"],
             durability=data["durability"]
         )
+        return _apply_grid_props(armor, data)
     
     # --- Oro ---
     if item_id == "gold":
@@ -251,11 +277,13 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
     
     # --- Amuleto de Ámbar ---
     if item_id == "amulet":
-        return Amulet(x, y)
+        amulet = Amulet(x, y)
+        amulet.description = "El legendario Amuleto de Ámbar. ¡Escapa con él!"
+        return amulet
     
     # --- Llave con forma de corazón (item clave de misión) ---
     if item_id == "heart_key":
-        return Item(
+        key = Item(
             x=x, y=y,
             char=SYMBOLS["key"],
             name="Llave con forma de corazón",
@@ -265,10 +293,13 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
             usable=False,
             persistent=True,
         )
+        key.sprite = "llave_corazon"
+        key.description = "Una llave con forma de corazón. Parece importante."
+        return key
     
     # --- Perfume Femenino (item clave de misión, recompensa del arco Nieta) ---
     if item_id == "perfume_femenino":
-        return Item(
+        perfume = Item(
             x=x, y=y,
             char="~",
             name="Perfume femenino",
@@ -278,10 +309,12 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
             usable=False,
             persistent=True,
         )
+        perfume.description = "Un delicado perfume con aroma floral."
+        return perfume
     
     # --- Carta de agradecimiento de la nieta (lore/quest item) ---
     if item_id == "carta_agradecimiento_nieta":
-        return Item(
+        carta = Item(
             x=x, y=y,
             char=SYMBOLS["scroll"],
             name="Carta de la niña",
@@ -291,88 +324,48 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
             usable=False,
             persistent=True,
         )
+        carta.description = "Una carta escrita con letra infantil."
+        return carta
     
     # ID no reconocido
     return None
 
 
-def create_item_for_floor(floor: int, x: int, y: int, allowed_types: Optional[List[str]] = None) -> Item:
+def _create_random_equipment(floor: int, x: int, y: int) -> Item:
     """
-    Crea un item aleatorio apropiado para el piso actual.
+    Crea un item de equipo aleatorio (arma o armadura) apropiado para el piso.
     
-    Distribución de probabilidades (pesos):
-    - Oro: 35% (consumible común)
-    - Poción: 40% (muy necesarias para sobrevivir)
-    - Arma: 15% (más raras)
-    - Armadura: 10% (las más raras)
+    Combina WEAPON_DATA y ARMOR_DATA en una sola pool candidata,
+    filtra por min_level <= floor, y selecciona por rarity (peso).
     
     Args:
-        floor: Número de piso
+        floor: Número de piso (filtra por min_level)
         x: Posición X
         y: Posición Y
-        allowed_types: Lista de tipos permitidos (None = todos). 
-                      Opciones: ["weapon", "armor", "potion", "gold"]
         
     Returns:
-        Un item apropiado
+        Un arma o armadura apropiada para el piso
     """
-    from .potion import Potion
-    from .weapon import Weapon
-    from .armor import Armor
-    from .special import Gold
+    candidates = []
+    weights = []
     
-    # Si hay tipos permitidos, filtrar según eso
-    if allowed_types is None:
-        allowed_types = ["weapon", "armor", "potion", "gold"]
+    for key, data in WEAPON_DATA.items():
+        if data["min_level"] <= floor:
+            candidates.append(key)
+            weights.append(data["rarity"])
     
-    # Sistema de pesos para mejor balance
-    # Ajustar pesos según qué tipos están permitidos
-    total_weight = 0.0
-    weights = {}
+    for key, data in ARMOR_DATA.items():
+        if data["min_level"] <= floor:
+            candidates.append(key)
+            weights.append(data["rarity"])
     
-    if "gold" in allowed_types:
-        weights["gold"] = 0.35
-        total_weight += 0.35
-    if "potion" in allowed_types:
-        weights["potion"] = 0.40
-        total_weight += 0.20
-    if "weapon" in allowed_types:
-        weights["weapon"] = 0.15
-        total_weight += 0.15
-    if "armor" in allowed_types:
-        weights["armor"] = 0.10
-        total_weight += 0.10
+    if not candidates:
+        # Fallback: primera arma del diccionario
+        first_key = next(iter(WEAPON_DATA))
+        return create_item(first_key, x, y)
     
-    # Normalizar pesos si hay tipos restringidos
-    if total_weight > 0:
-        for key in weights:
-            weights[key] = weights[key] / total_weight
-    
-    # Generar roll normalizado
-    roll = random.random() * total_weight
-    
-    current = 0.0
-    if "gold" in allowed_types:
-        current += weights["gold"]
-        if roll < current:
-            return create_item("gold", x, y)
-    
-    if "potion" in allowed_types:
-        current += weights["potion"]
-        if roll < current:
-            return _create_random_potion(x, y)
-    
-    if "weapon" in allowed_types:
-        current += weights["weapon"]
-        if roll < current:
-            return _create_random_weapon(floor, x, y)
-    
-    if "armor" in allowed_types:
-        # Armadura (última opción)
-        return _create_random_armor(floor, x, y)
-    
-    # Fallback: oro si nada más está disponible
-    return create_item("gold", x, y)
+    chosen_key = random.choices(candidates, weights=weights)[0]
+    return create_item(chosen_key, x, y)
 
 
 def _create_random_potion(x: int, y: int) -> Item:

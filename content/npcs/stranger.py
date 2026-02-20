@@ -534,11 +534,11 @@ def register_npc_states(manager) -> None:
     from roguelike.systems.npc_states import NPCStateConfig, StateTransition
     from roguelike.systems.events import event_manager
     
-    # Estado "start" - Piso 4, primera vez que lo encuentras
+    # Estado "start" - Piso 3, primera vez que lo encuentras
     manager.register_npc_state("Stranger", NPCStateConfig(
         state_id="start",
         zone_type="dungeon",
-        floor=4,
+        floor=3,
         position=None,  # Se calcula al spawnear en una habitación aleatoria
         dialog_tree_func=create_stranger_floor5_dialog,
         completion_condition=lambda p, z: event_manager.is_event_triggered("stranger_floor5_met"),

@@ -31,7 +31,7 @@ from roguelike.systems.text import DialogTree, DialogNode, DialogOption, Interac
 # ============================================================================
 
 # Coste fijo para reabastecer la tienda del mercader (por run)
-RESTOCK_COST: int = 15
+RESTOCK_COST: int = 5
 
 
 # ============================================================================
@@ -192,7 +192,7 @@ def register_npc_states(manager) -> None:
     manager.register_npc_state("Comerciante Errante", NPCStateConfig(
         state_id="greeting",
         zone_type="lobby",
-        position=(36, 10),
+        position=(36, 12),
         char="$",
         color="gold",
         dialog_tree_func=create_wanderer_greeting_dialog,

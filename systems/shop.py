@@ -207,19 +207,18 @@ class Shop:
         if player.gold < shop_item.price:
             return False, f"No tienes suficiente oro. Necesitas {shop_item.price} monedas."
         
-        # Verificar espacio en inventario
-        if len(player.inventory) >= 26:
-            return False, "Tu inventario está lleno."
-        
         # Crear el item usando la factoría
         item = shop_item.create_item()
         
         if item is None:
             return False, f"Error: no se pudo crear {shop_item.name} (item_id={shop_item.item_id!r})."
         
+        # Verificar espacio en inventario (grid)
+        if not player.add_to_inventory(item):
+            return False, "Tu inventario está lleno (no cabe en el grid)."
+        
         # Realizar la compra
         player.gold -= shop_item.price
-        player.inventory.append(item)
         
         # Gestionar stock
         if shop_item.stock > 0:

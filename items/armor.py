@@ -121,4 +121,7 @@ class Armor(Item):
         # Restaurar max_durability desde el save; fallback a durability actual
         armor.max_durability = data.get("max_durability", armor.durability)
         armor.persistent = data.get("persistent", False)
+        armor.grid_width = data.get("grid_width", 2)
+        armor.grid_height = data.get("grid_height", 2)
+        armor.description = data.get("description", "")
         return armor

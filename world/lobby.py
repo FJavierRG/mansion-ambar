@@ -66,8 +66,8 @@ class Lobby(Zone):
         # Crear una sala grande en el centro
         center_x = self.width // 2
         center_y = self.height // 2
-        room_width = min(30, self.width - 10)
-        room_height = min(20, self.height - 10)
+        room_width = min(25, self.width - 10)
+        room_height = min(15, self.height - 10)
         
         room_x = center_x - room_width // 2
         room_y = center_y - room_height // 2
@@ -116,8 +116,18 @@ class Lobby(Zone):
             start_x = center_x + 1
             start_y = room_y + room_height - 2
         
+        # Colocar ventanas con efecto de relámpago: luz entrando por la pared derecha
+        # Dos ventanas en columna (una encima de la otra)
+        window_x = room_x + room_width - 3  # En el suelo, cerca de la pared derecha
+        window_y = center_y - 1             # Primera ventana (arriba)
+        self.decorations[(window_x, window_y)] = ("ventanas", 0)
+        self.decorations[(window_x, window_y + 2)] = ("ventanas", 0)  # Segunda ventana (abajo, +2 tiles = 32px)
+        
         # Spawnear NPCs basándose en configuración de estados
         self.spawn_npcs_from_states()
+        
+        # Colocar hoguera animada junto al Comerciante Errante (si está presente)
+        self._place_campfire_near_wanderer()
         
         # En el lobby, todos los tiles deben estar visibles desde el inicio
         # (sin niebla de guerra)
@@ -143,6 +153,27 @@ class Lobby(Zone):
         
         # Usar el sistema centralizado de spawn (no requiere player)
         npc_state_manager.spawn_npcs_for_zone(zone=self)
+    
+    def _place_campfire_near_wanderer(self) -> None:
+        """
+        Coloca la hoguera animada a la izquierda del Comerciante Errante.
+        Solo aparece si el NPC está presente en el lobby.
+        """
+        # Limpiar hoguera previa (por si el lobby se reutiliza)
+        self.decorations = {
+            pos: deco for pos, deco in self.decorations.items()
+            if deco[0] != "hoguera"
+        }
+        
+        # Buscar al Comerciante Errante entre las entidades
+        wanderer = next(
+            (e for e in self.entities if e.name == "Comerciante Errante"),
+            None
+        )
+        if wanderer:
+            campfire_x = wanderer.x - 2  # 2 tiles a la izquierda
+            campfire_y = wanderer.y
+            self.decorations[(campfire_x, campfire_y)] = ("hoguera", 0)
     
     def _reveal_all_tiles(self) -> None:
         """

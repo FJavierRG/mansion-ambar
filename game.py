@@ -67,6 +67,15 @@ class Game:
         self.inventory_scroll = 0  # Offset de scroll
         self.inventory_max_visible = 12  # Items visibles a la vez
         
+        # Estado de ratón para inventario grid
+        self._inv_dragging = False                # ¿Arrastrando un item?
+        self._inv_drag_item: Optional[Any] = None # Item siendo arrastrado
+        self._inv_drag_origin_gx = 0              # Columna original en grid
+        self._inv_drag_origin_gy = 0              # Fila original en grid
+        self._inv_drag_mouse_pos = (0, 0)         # Posición actual del ratón
+        self._inv_context_menu: Optional[dict] = None  # Menú contextual {item, pixel_x, pixel_y, options}
+        self._inv_hover_item: Optional[Any] = None     # Item bajo el cursor (para tooltip)
+        
         # Entidad con la que se interactuó por última vez (para eventos)
         self._last_interacted_entity: Optional[Any] = None
         # Estado FSM del NPC al inicio de la interacción (para no completar estados cambiados por acciones)
@@ -193,6 +202,13 @@ class Game:
                     self.console_input += event.text
                 elif event.type == pygame.MOUSEWHEEL:
                     self._handle_mousewheel(event.y)
+                # ── Eventos de ratón para inventario grid ──
+                elif event.type == pygame.MOUSEBUTTONDOWN and self.state == GameState.INVENTORY:
+                    self._handle_inventory_mouse_down(event.button, event.pos)
+                elif event.type == pygame.MOUSEBUTTONUP and self.state == GameState.INVENTORY:
+                    self._handle_inventory_mouse_up(event.button, event.pos)
+                elif event.type == pygame.MOUSEMOTION and self.state == GameState.INVENTORY:
+                    self._handle_inventory_mouse_motion(event.pos)
         else:
             # Durante animaciones, solo procesar quit
             for event in pygame.event.get():
@@ -220,6 +236,10 @@ class Game:
                 options_cursor=self.options_menu_cursor,
                 donation_amount=self.donation_amount,
                 donation_digit=self.donation_digit,
+                inv_drag_item=self._inv_drag_item if self._inv_dragging else None,
+                inv_drag_mouse_pos=self._inv_drag_mouse_pos,
+                inv_context_menu=self._inv_context_menu,
+                inv_hover_item=self._inv_hover_item,
             )
         
         self.renderer.tick(FPS)
@@ -326,75 +346,357 @@ class Game:
                         self.message_log.add(f"Evento: {event.name}", "message_important")
     
     def _handle_inventory_input(self, key: int) -> None:
-        """Maneja la entrada en el inventario con navegación por flechas."""
-        inventory_size = len(self.player.inventory)
-        
+        """Maneja la entrada de teclado en el inventario (solo ESC/I para cerrar)."""
         # Cerrar inventario
-        if key == pygame.K_ESCAPE:
-            self.inventory_mode = "normal"
-            self.inventory_cursor = 0
-            self.inventory_scroll = 0
-            self.state = GameState.PLAYING
+        if key in (pygame.K_ESCAPE, pygame.K_i):
+            self._close_inventory()
             return
+
+    def _close_inventory(self) -> None:
+        """Cierra el inventario y limpia todo el estado de ratón."""
+        # Si estamos arrastrando un item, devolverlo al grid
+        if self._inv_dragging and self._inv_drag_item is not None:
+            grid_inv = self.player.grid_inventory
+            if not grid_inv.place(self._inv_drag_item, self._inv_drag_origin_gx, self._inv_drag_origin_gy):
+                grid_inv.auto_place(self._inv_drag_item)
         
-        if key == pygame.K_i:
-            self.inventory_mode = "normal"
-            self.inventory_cursor = 0
-            self.inventory_scroll = 0
-            self.state = GameState.PLAYING
-            return
+        self.inventory_mode = "normal"
+        self.inventory_cursor = 0
+        self.inventory_scroll = 0
+        self._inv_dragging = False
+        self._inv_drag_item = None
+        self._inv_context_menu = None
+        self._inv_hover_item = None
+        self.state = GameState.PLAYING
+
+    # ── Manejo de ratón para inventario grid ──────────────────────
+
+    def _handle_inventory_mouse_down(self, button: int, pos: tuple) -> None:
+        """
+        Maneja click del ratón en el inventario.
         
-        # Navegación con flechas
-        if key == pygame.K_UP or key == pygame.K_k:
-            if inventory_size > 0:
-                self.inventory_cursor = (self.inventory_cursor - 1) % inventory_size
-                # Ajustar scroll si es necesario
-                if self.inventory_cursor < self.inventory_scroll:
-                    self.inventory_scroll = self.inventory_cursor
-                elif self.inventory_cursor >= self.inventory_scroll + self.inventory_max_visible:
-                    self.inventory_scroll = self.inventory_cursor - self.inventory_max_visible + 1
-            return
-        
-        if key == pygame.K_DOWN or key == pygame.K_j:
-            if inventory_size > 0:
-                self.inventory_cursor = (self.inventory_cursor + 1) % inventory_size
-                # Ajustar scroll si es necesario
-                if self.inventory_cursor >= self.inventory_scroll + self.inventory_max_visible:
-                    self.inventory_scroll = self.inventory_cursor - self.inventory_max_visible + 1
-                elif self.inventory_cursor < self.inventory_scroll:
-                    self.inventory_scroll = self.inventory_cursor
-            return
-        
-        # Scroll con Page Up/Down
-        if key == pygame.K_PAGEUP:
-            self.inventory_scroll = max(0, self.inventory_scroll - self.inventory_max_visible)
-            self.inventory_cursor = self.inventory_scroll
-            return
-        
-        if key == pygame.K_PAGEDOWN:
-            max_scroll = max(0, inventory_size - self.inventory_max_visible)
-            self.inventory_scroll = min(max_scroll, self.inventory_scroll + self.inventory_max_visible)
-            self.inventory_cursor = min(self.inventory_scroll, inventory_size - 1)
-            return
-        
-        # Modo soltar (D)
-        if key == pygame.K_d:
-            if self.inventory_mode == "drop":
-                # Ya en modo soltar: desactivar
-                self.inventory_mode = "normal"
-            else:
-                self.inventory_mode = "drop"
-                self.message_log.add("SOLTAR: Navega con ↑↓ y confirma con ENTER.")
-            return
-        
-        # Confirmar selección con ENTER
-        if key == pygame.K_RETURN or key == pygame.K_KP_ENTER:
-            if inventory_size == 0:
-                self.message_log.add("El inventario está vacío.")
+        button=1: Click izquierdo → iniciar drag / cerrar menú contextual
+        button=3: Click derecho → abrir menú contextual
+        """
+        mx, my = pos
+
+        # Click izquierdo
+        if button == 1:
+            # Si hay menú contextual abierto, comprobar si hacemos click en una opción
+            if self._inv_context_menu is not None:
+                option_clicked = self._get_context_menu_option_at(mx, my)
+                if option_clicked is not None:
+                    self._execute_context_action(option_clicked)
+                # Siempre cerrar el menú contextual con click izquierdo
+                self._inv_context_menu = None
                 return
-            
-            self._execute_inventory_action(self.inventory_cursor)
+
+            # Identificar item bajo el cursor
+            grid_inv = self.player.grid_inventory
+            gx, gy = self.renderer.pixel_to_grid_cell(mx, my)
+            if gx >= 0 and gy >= 0:
+                item = grid_inv.get_item_at(gx, gy)
+                if item is not None:
+                    # Iniciar drag
+                    self._inv_dragging = True
+                    self._inv_drag_item = item
+                    pos_info = grid_inv.get_item_position(item)
+                    if pos_info:
+                        self._inv_drag_origin_gx, self._inv_drag_origin_gy = pos_info
+                    self._inv_drag_mouse_pos = pos
+                    # Sacar el item del grid temporalmente para que pueda recolocarse
+                    grid_inv.remove(item)
+                    return
+
+        # Click derecho
+        elif button == 3:
+            # Cerrar menú existente si hay uno
+            self._inv_context_menu = None
+
+            grid_inv = self.player.grid_inventory
+            gx, gy = self.renderer.pixel_to_grid_cell(mx, my)
+            if gx >= 0 and gy >= 0:
+                item = grid_inv.get_item_at(gx, gy)
+                if item is not None:
+                    self._open_context_menu(item, mx, my)
+
+    def _handle_inventory_mouse_up(self, button: int, pos: tuple) -> None:
+        """
+        Maneja soltar el ratón en el inventario.
+        
+        button=1: Fin de drag → colocar item o soltarlo
+        """
+        if button != 1 or not self._inv_dragging:
             return
+
+        mx, my = pos
+        item = self._inv_drag_item
+        if item is None:
+            self._inv_dragging = False
+            return
+
+        grid_inv = self.player.grid_inventory
+
+        # ¿Soltamos dentro del grid?
+        on_grid = self.renderer.is_pixel_on_grid(mx, my)
+
+        if on_grid:
+            # Calcular celda destino (centrada en el item)
+            gx, gy = self.renderer.pixel_to_grid_cell(mx, my)
+            # Ajustar para que la esquina superior izq del item quede bien
+            w = getattr(item, 'grid_width', 1)
+            h = getattr(item, 'grid_height', 1)
+            target_gx = max(0, min(gx - w // 2, grid_inv.width - w))
+            target_gy = max(0, min(gy - h // 2, grid_inv.height - h))
+
+            if grid_inv.can_place(item, target_gx, target_gy):
+                grid_inv.place(item, target_gx, target_gy)
+            else:
+                # Intentar posición exacta donde soltamos
+                if gx >= 0 and gy >= 0 and grid_inv.can_place(item, gx, gy):
+                    grid_inv.place(item, gx, gy)
+                else:
+                    # No cabe → devolver a posición original
+                    if not grid_inv.place(item, self._inv_drag_origin_gx, self._inv_drag_origin_gy):
+                        # Último recurso: auto-place
+                        if not grid_inv.auto_place(item):
+                            # Imposible colocar → soltar al suelo
+                            from roguelike.systems.inventory import Inventory
+                            msgs = Inventory.drop_item_direct(self.player, self.dungeon, item)
+                            self.message_log.add_multiple(msgs)
+        else:
+            # Soltamos fuera del grid → TIRAR el item
+            on_window = self.renderer.is_pixel_on_inventory_window(mx, my)
+            if not on_window:
+                # Fuera de la ventana de inventario = tirar item
+                # Verificar si está equipado
+                is_equipped = any(eq is item for eq in self.player.equipped.values() if eq is not None)
+                if is_equipped:
+                    self.message_log.add(f"Primero debes desequipar {item.name}.")
+                    # Devolver al grid
+                    if not grid_inv.place(item, self._inv_drag_origin_gx, self._inv_drag_origin_gy):
+                        grid_inv.auto_place(item)
+                else:
+                    # Tirar al suelo
+                    self.dungeon.add_item(item, self.player.x, self.player.y)
+                    self.message_log.add(f"Sueltas {item.name}.")
+            else:
+                # Dentro de la ventana pero fuera del grid → devolver
+                if not grid_inv.place(item, self._inv_drag_origin_gx, self._inv_drag_origin_gy):
+                    grid_inv.auto_place(item)
+
+        # Limpiar estado de drag
+        self._inv_dragging = False
+        self._inv_drag_item = None
+
+    def _handle_inventory_mouse_motion(self, pos: tuple) -> None:
+        """
+        Maneja el movimiento del ratón en el inventario.
+        Actualiza posición del drag y tooltip hover.
+        """
+        mx, my = pos
+        self._inv_drag_mouse_pos = pos
+
+        # Si no estamos arrastrando, actualizar hover
+        if not self._inv_dragging:
+            grid_inv = self.player.grid_inventory
+            gx, gy = self.renderer.pixel_to_grid_cell(mx, my)
+            if gx >= 0 and gy >= 0:
+                self._inv_hover_item = grid_inv.get_item_at(gx, gy)
+            else:
+                self._inv_hover_item = None
+
+    # ── Menú contextual ──────────────────────────────────────────
+
+    def _open_context_menu(self, item, px: int, py: int) -> None:
+        """Abre el menú contextual para un item."""
+        options = []
+
+        # Verificar si está equipado
+        is_equipped = any(eq is item for eq in self.player.equipped.values() if eq is not None)
+
+        if is_equipped:
+            slot = getattr(item, 'slot', None)
+            if slot:
+                options.append({"label": "Desequipar", "action": "unequip", "slot": slot})
+        else:
+            # Equipable
+            if hasattr(item, 'slot') and item.slot:
+                options.append({"label": "Equipar", "action": "equip"})
+            # Usable
+            if hasattr(item, 'usable') and item.usable:
+                options.append({"label": "Usar", "action": "use"})
+
+        # Siempre se puede soltar (si no equipado)
+        if not is_equipped:
+            options.append({"label": "Soltar", "action": "drop"})
+
+        if options:
+            self._inv_context_menu = {
+                "item": item,
+                "pixel_x": px,
+                "pixel_y": py,
+                "options": options,
+            }
+
+    def _get_context_menu_option_at(self, mx: int, my: int):
+        """Retorna la opción del menú contextual bajo el ratón, o None."""
+        if self._inv_context_menu is None:
+            return None
+
+        cm_x = self._inv_context_menu.get("pixel_x", 0)
+        cm_y = self._inv_context_menu.get("pixel_y", 0)
+        options = self._inv_context_menu.get("options", [])
+        cm_w = 140
+        cm_line_h = 28
+
+        # Ajustar posición (misma lógica que el renderer)
+        from roguelike.config import WINDOW_WIDTH, WINDOW_HEIGHT
+        cm_h = len(options) * cm_line_h + 8
+        if cm_x + cm_w > WINDOW_WIDTH:
+            cm_x = WINDOW_WIDTH - cm_w - 4
+        if cm_y + cm_h > WINDOW_HEIGHT:
+            cm_y = WINDOW_HEIGHT - cm_h - 4
+
+        for i, opt in enumerate(options):
+            opt_y = cm_y + 4 + i * cm_line_h
+            if cm_x <= mx <= cm_x + cm_w and opt_y <= my <= opt_y + cm_line_h:
+                return opt
+        return None
+
+    def _execute_context_action(self, option: dict) -> None:
+        """Ejecuta una acción del menú contextual."""
+        if self._inv_context_menu is None:
+            return
+
+        item = self._inv_context_menu.get("item")
+        if item is None:
+            return
+
+        action = option.get("action")
+        messages = []
+        close_inventory = False
+        consume_turn = False
+
+        if action == "unequip":
+            slot = option.get("slot")
+            if slot:
+                from roguelike.systems.inventory import Inventory
+                messages = Inventory.unequip_item(self.player, slot)
+
+        elif action == "equip":
+            # Necesitamos el índice del item
+            items = self.player.grid_inventory.get_all_items()
+            try:
+                idx = items.index(item)
+            except ValueError:
+                idx = -1
+            if idx >= 0:
+                from roguelike.systems.inventory import Inventory
+                messages = Inventory.equip_item(self.player, idx)
+
+        elif action == "use":
+            items = self.player.grid_inventory.get_all_items()
+            try:
+                idx = items.index(item)
+            except ValueError:
+                idx = -1
+            if idx >= 0:
+                from roguelike.systems.inventory import Inventory
+                messages = Inventory.use_item(self.player, idx)
+                close_inventory = True
+                consume_turn = True
+
+        elif action == "drop":
+            from roguelike.systems.inventory import Inventory
+            messages = Inventory.drop_item_direct(self.player, self.dungeon, item)
+
+        self.message_log.add_multiple(messages)
+
+        # Verificar si el jugador murió (p.ej. poción de veneno)
+        if self.player.fighter.is_dead:
+            self._handle_player_death()
+        elif close_inventory:
+            self.state = GameState.PLAYING
+            if consume_turn:
+                self._enemy_turn()
+                self._update_fov()
+
+    def _find_grid_neighbor(self, dx: int, dy: int) -> int:
+        """
+        Encuentra el índice del item vecino más cercano en la dirección (dx, dy)
+        dentro del grid de inventario.
+        
+        Usa las posiciones reales del grid para navegación espacial 2D.
+        Si no hay vecino en esa dirección, cicla al siguiente/anterior item.
+        
+        Returns:
+            Nuevo índice del cursor
+        """
+        grid_inv = self.player.grid_inventory
+        items = grid_inv.get_all_items()
+        if not items:
+            return 0
+        
+        n = len(items)
+        cur = max(0, min(self.inventory_cursor, n - 1))
+        current_item = items[cur]
+        
+        # Obtener posición del item actual en el grid
+        cur_pos = grid_inv.get_item_position(current_item)
+        if cur_pos is None:
+            # Fallback: simple ciclo
+            return (cur + (1 if dy > 0 or dx > 0 else -1)) % n
+        
+        cur_gx, cur_gy = cur_pos
+        # Centro del item actual
+        cur_w = getattr(current_item, 'grid_width', 1)
+        cur_h = getattr(current_item, 'grid_height', 1)
+        cur_cx = cur_gx + cur_w / 2.0
+        cur_cy = cur_gy + cur_h / 2.0
+        
+        best_idx = None
+        best_dist = float('inf')
+        
+        for i, item in enumerate(items):
+            if i == cur:
+                continue
+            pos = grid_inv.get_item_position(item)
+            if pos is None:
+                continue
+            igx, igy = pos
+            iw = getattr(item, 'grid_width', 1)
+            ih = getattr(item, 'grid_height', 1)
+            icx = igx + iw / 2.0
+            icy = igy + ih / 2.0
+            
+            # Verificar que el item está en la dirección correcta
+            diff_x = icx - cur_cx
+            diff_y = icy - cur_cy
+            
+            # Producto escalar con la dirección
+            dot = diff_x * dx + diff_y * dy
+            if dot <= 0:
+                continue  # Item no está en la dirección deseada
+            
+            # Distancia ponderada: penalizar desviación perpendicular
+            if dx != 0:  # Movimiento horizontal
+                dist = abs(diff_x) + abs(diff_y) * 2.0
+            else:  # Movimiento vertical
+                dist = abs(diff_y) + abs(diff_x) * 2.0
+            
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+        
+        if best_idx is not None:
+            return best_idx
+        
+        # Si no hay vecino en esa dirección, ciclar simple
+        if dy > 0 or dx > 0:
+            return (cur + 1) % n
+        else:
+            return (cur - 1) % n
     
     def _execute_inventory_action(self, index: int) -> None:
         """Ejecuta la acción del inventario sobre el item seleccionado.

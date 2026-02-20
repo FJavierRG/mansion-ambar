@@ -11,9 +11,12 @@ from ..config import (
     MAP_WIDTH, MAP_HEIGHT, ROOM_MIN_SIZE, ROOM_MAX_SIZE,
     MAX_ROOMS, MAX_ROOM_MONSTERS, MAX_DUNGEON_LEVEL,
     SYMBOLS, DOOR_CHANCE,
-    FLOOR_COMBAT_ITEMS, FLOOR_COMBAT_ITEMS_DEFAULT,
-    FLOOR_GOLD_ITEMS, FLOOR_GOLD_ITEMS_DEFAULT,
+    POOL_SPAWN_CHANCE,
+    FLOOR_EQUIPMENT_RANGE, FLOOR_EQUIPMENT_RANGE_DEFAULT,
+    FLOOR_POTION_RANGE, FLOOR_POTION_RANGE_DEFAULT,
+    FLOOR_GOLD_RANGE, FLOOR_GOLD_RANGE_DEFAULT,
     FLOOR_ROOM_COUNT, FLOOR_ROOM_COUNT_DEFAULT,
+    FLOOR_MAP_MARGIN, FLOOR_MAP_MARGIN_DEFAULT,
 )
 
 if TYPE_CHECKING:
@@ -21,6 +24,23 @@ if TYPE_CHECKING:
     from ..entities.player import Player
     from ..entities.monster import Monster
     from ..items.item import Item
+
+
+def _get_pool_spawn_chance(pool: str, floor: int = 0) -> float:
+    """
+    Devuelve la probabilidad de que una pool aparezca en un piso dado.
+    
+    Por ahora retorna el valor fijo global de POOL_SPAWN_CHANCE.
+    Preparado para extender con lógica per-piso, eventos, items, etc.
+    
+    Args:
+        pool: Nombre de la pool ("equipment", "potion", "gold")
+        floor: Número de piso (sin uso por ahora, reservado)
+        
+    Returns:
+        Probabilidad [0.0, 1.0]
+    """
+    return POOL_SPAWN_CHANCE.get(pool, 0.0)
 
 
 class Dungeon:
@@ -88,6 +108,9 @@ class Dungeon:
         min_rooms, max_rooms = FLOOR_ROOM_COUNT.get(self.floor, FLOOR_ROOM_COUNT_DEFAULT)
         target_rooms = random.randint(min_rooms, max_rooms)
         
+        # Margen de colocación: concentra las salas en pisos con pocas
+        margin_x, margin_y = FLOOR_MAP_MARGIN.get(self.floor, FLOOR_MAP_MARGIN_DEFAULT)
+        
         # Generar habitaciones
         for _ in range(target_rooms * 3):  # Suficientes intentos para alcanzar el objetivo
             if len(self.rooms) >= target_rooms:
@@ -97,9 +120,19 @@ class Dungeon:
             w = random.randint(ROOM_MIN_SIZE, ROOM_MAX_SIZE)
             h = random.randint(ROOM_MIN_SIZE, ROOM_MAX_SIZE)
             
-            # Posición aleatoria
-            x = random.randint(1, self.width - w - 2)
-            y = random.randint(1, self.height - h - 2)
+            # Posición aleatoria dentro del área efectiva (con margen)
+            x_min = 1 + margin_x
+            x_max = self.width - w - 2 - margin_x
+            y_min = 1 + margin_y
+            y_max = self.height - h - 2 - margin_y
+            
+            # Seguridad: si el margen es excesivo, ignorarlo
+            if x_min >= x_max or y_min >= y_max:
+                x_min, x_max = 1, self.width - w - 2
+                y_min, y_max = 1, self.height - h - 2
+            
+            x = random.randint(x_min, x_max)
+            y = random.randint(y_min, y_max)
             
             new_room = Room(x, y, w, h)
             
@@ -108,8 +141,9 @@ class Dungeon:
                 self._create_room(new_room)
                 
                 if self.rooms:
-                    # Conectar con la habitación anterior
-                    self._create_tunnel(self.rooms[-1].center, new_room.center)
+                    # Conectar con la sala existente más cercana
+                    nearest = min(self.rooms, key=lambda r: r.distance_to(new_room))
+                    self._create_tunnel(nearest.center, new_room.center)
                 
                 self.rooms.append(new_room)
         
@@ -277,12 +311,14 @@ class Dungeon:
         """Puebla la mazmorra con monstruos e items.
         
         Los monstruos se generan por habitación.
-        Los items se distribuyen con round-robin entre salas (dos pools):
-          - Pool de combate: pociones, armas, armaduras
-          - Pool de oro: monedas (separado, sobrevive entre runs)
+        Los items siguen un sistema de 3 pools independientes:
+          1. ¿Aparece esta pool? → probabilidad (POOL_SPAWN_CHANCE)
+          2. ¿Cuántos? → rango por piso (FLOOR_*_RANGE), min ≥ 1
+          3. ¿Cuál concreto? → selección por rarity + min_level
+          4. Reparto → round-robin entre salas
         """
         from ..entities.monster import Monster, create_monster_for_floor
-        from ..items.item import create_item_for_floor, create_item
+        from ..items.item import create_item, _create_random_equipment, _create_random_potion
         
         eligible_rooms = self.rooms[1:]  # Excluir sala de spawn
         
@@ -298,31 +334,40 @@ class Dungeon:
         # --- Items: desbloqueo progresivo por narrativa ---
         # Fase 1: Sin items (primera run, va a puños)
         # Fase 2: Solo armas y armaduras
-        # Fase 3: Todo + monedas de oro
+        # Fase 3: Todo (equipo + pociones + oro)
         from ..systems.events import event_manager
         
         weapons_unlocked = event_manager.is_event_triggered("stranger_lobby_weapons_unlocked")
         potions_unlocked = event_manager.is_event_triggered("stranger_lobby_potions_unlocked")
         
         if weapons_unlocked and eligible_rooms:
-            combat_types = ["weapon", "armor", "potion"] if potions_unlocked else ["weapon", "armor"]
-            
-            # Pool 1: Items de combate (round-robin)
-            min_c, max_c = FLOOR_COMBAT_ITEMS.get(self.floor, FLOOR_COMBAT_ITEMS_DEFAULT)
-            num_combat = random.randint(min_c, max_c)
-            self._distribute_items_round_robin(
-                eligible_rooms, num_combat,
-                lambda x, y: create_item_for_floor(self.floor, x, y, allowed_types=combat_types)
-            )
-            
-            # Pool 2: Oro (round-robin, separado — solo Fase 3)
-            if potions_unlocked:
-                min_g, max_g = FLOOR_GOLD_ITEMS.get(self.floor, FLOOR_GOLD_ITEMS_DEFAULT)
-                num_gold = random.randint(min_g, max_g)
+            # Pool 1: Equipo (armas + armaduras)
+            if random.random() < _get_pool_spawn_chance("equipment", self.floor):
+                lo, hi = FLOOR_EQUIPMENT_RANGE.get(self.floor, FLOOR_EQUIPMENT_RANGE_DEFAULT)
+                count = random.randint(lo, hi)
                 self._distribute_items_round_robin(
-                    eligible_rooms, num_gold,
-                    lambda x, y: create_item("gold", x, y)
+                    eligible_rooms, count,
+                    lambda x, y: _create_random_equipment(self.floor, x, y)
                 )
+            
+            if potions_unlocked:
+                # Pool 2: Pociones
+                if random.random() < _get_pool_spawn_chance("potion", self.floor):
+                    lo, hi = FLOOR_POTION_RANGE.get(self.floor, FLOOR_POTION_RANGE_DEFAULT)
+                    count = random.randint(lo, hi)
+                    self._distribute_items_round_robin(
+                        eligible_rooms, count,
+                        lambda x, y: _create_random_potion(x, y)
+                    )
+                
+                # Pool 3: Oro
+                if random.random() < _get_pool_spawn_chance("gold", self.floor):
+                    lo, hi = FLOOR_GOLD_RANGE.get(self.floor, FLOOR_GOLD_RANGE_DEFAULT)
+                    count = random.randint(lo, hi)
+                    self._distribute_items_round_robin(
+                        eligible_rooms, count,
+                        lambda x, y: create_item("gold", x, y)
+                    )
         
         # Spawn del jefe en el último piso
         if self.floor == MAX_DUNGEON_LEVEL and not self.boss_spawned:

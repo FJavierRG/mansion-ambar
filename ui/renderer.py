@@ -5,11 +5,14 @@ Dibuja el mapa, entidades, UI y mensajes usando Pygame.
 from __future__ import annotations
 from typing import TYPE_CHECKING, List, Tuple, Set, Optional, Any
 import pygame
+import time
+import random
 
 from ..config import (
     WINDOW_WIDTH, WINDOW_HEIGHT, TILE_SIZE, FONT_NAME, FONT_SIZE,
     COLORS, MAP_WIDTH, MAP_HEIGHT, MESSAGE_LOG_HEIGHT,
-    FPS, GameState
+    FPS, GameState,
+    GRID_INVENTORY_WIDTH, GRID_INVENTORY_HEIGHT
 )
 from .hud import HUD
 from .message_log import MessageLog
@@ -23,6 +26,92 @@ if TYPE_CHECKING:
     from ..entities.player import Player
     from ..entities.entity import Entity
     from ..systems.animation import AnimationManager
+
+
+# ============================================================================
+# EFECTO RELÁMPAGO EN VENTANA (lobby)
+# Fácil de desactivar: pon LIGHTNING_ENABLED = False
+# ============================================================================
+LIGHTNING_ENABLED: bool = True
+
+class LightningEffect:
+    """
+    Efecto de relámpago para decoraciones tipo 'ventanas'.
+    
+    Ciclo: espera aleatoria → flash1 → pausa → flash2 → fade out → repetir.
+    Devuelve un alpha (0-255) que el renderer aplica al sprite.
+    """
+    
+    # Tiempos de cada fase (en segundos)
+    WAIT_MIN: float = 15.0   # Mínimo entre relámpagos
+    WAIT_MAX: float = 35.0   # Máximo entre relámpagos
+    FLASH1_ON: float = 0.08  # Primer destello
+    FLASH1_OFF: float = 0.10 # Pausa entre destellos
+    FLASH2_ON: float = 0.12  # Segundo destello
+    FADE_OUT: float = 0.66   # Desvanecimiento lento
+    
+    def __init__(self) -> None:
+        self._phase: str = "idle"       # idle, flash1_on, flash1_off, flash2_on, fade_out
+        self._phase_start: float = time.time()
+        self._next_strike: float = time.time() + random.uniform(
+            self.WAIT_MIN, self.WAIT_MAX
+        )
+        self._just_triggered: bool = False  # True solo en el frame que arranca el rayo
+    
+    def did_trigger(self) -> bool:
+        """Devuelve True una sola vez cuando arranca un relámpago (para disparar sonido)."""
+        if self._just_triggered:
+            self._just_triggered = False
+            return True
+        return False
+    
+    def _enter_phase(self, phase: str) -> None:
+        """Cambia de fase y resetea el cronómetro."""
+        self._phase = phase
+        self._phase_start = time.time()
+    
+    def get_alpha(self) -> int:
+        """
+        Devuelve el alpha actual (0-255) del sprite de la ventana.
+        Avanza la máquina de estados internamente.
+        """
+        now = time.time()
+        elapsed = now - self._phase_start
+        
+        if self._phase == "idle":
+            if now >= self._next_strike:
+                self._enter_phase("flash1_on")
+                self._just_triggered = True
+            return 0
+        
+        elif self._phase == "flash1_on":
+            if elapsed >= self.FLASH1_ON:
+                self._enter_phase("flash1_off")
+            return 255
+        
+        elif self._phase == "flash1_off":
+            if elapsed >= self.FLASH1_OFF:
+                self._enter_phase("flash2_on")
+            return 0
+        
+        elif self._phase == "flash2_on":
+            if elapsed >= self.FLASH2_ON:
+                self._enter_phase("fade_out")
+            return 255
+        
+        elif self._phase == "fade_out":
+            if elapsed >= self.FADE_OUT:
+                # Volver a idle con nueva espera aleatoria
+                self._enter_phase("idle")
+                self._next_strike = now + random.uniform(
+                    self.WAIT_MIN, self.WAIT_MAX
+                )
+                return 0
+            # Interpolación lineal de 255 → 0
+            progress = elapsed / self.FADE_OUT
+            return int(255 * (1.0 - progress))
+        
+        return 0
 
 
 class Renderer:
@@ -69,6 +158,11 @@ class Renderer:
         
         # Referencia al animation manager (se actualiza en cada render)
         self._current_animation_manager: Optional[Any] = None
+        
+        # Efecto de relámpago para ventanas del lobby
+        self._lightning_effect: Optional[LightningEffect] = (
+            LightningEffect() if LIGHTNING_ENABLED else None
+        )
     
     def render(
         self,
@@ -90,6 +184,10 @@ class Renderer:
         options_cursor: int = 0,
         donation_amount: int = 0,
         donation_digit: int = 0,
+        inv_drag_item: object = None,
+        inv_drag_mouse_pos: tuple = (0, 0),
+        inv_context_menu: dict = None,
+        inv_hover_item: object = None,
     ) -> None:
         """
         Renderiza todo el juego.
@@ -145,7 +243,13 @@ class Renderer:
         
         # Renderizar overlays según estado
         if game_state == GameState.INVENTORY:
-            self._render_inventory(player, inventory_mode, cursor, scroll)
+            self._render_inventory(
+                player, inventory_mode, cursor, scroll,
+                drag_item=inv_drag_item,
+                drag_mouse_pos=inv_drag_mouse_pos,
+                context_menu=inv_context_menu,
+                hover_item=inv_hover_item,
+            )
         elif game_state == GameState.DEAD:
             self._render_death_screen()
         elif game_state == GameState.VICTORY:
@@ -229,14 +333,41 @@ class Renderer:
                     self._draw_char(item.x, item.y, item.char, color)
     
     def _render_decorations(self, dungeon: Dungeon, visible_tiles: Set[Tuple[int, int]]) -> None:
-        """Renderiza las decoraciones del suelo (sangre, etc.)."""
+        """Renderiza las decoraciones del suelo (sangre, hogueras animadas, ventanas con relámpago, etc.)."""
+        current_time = time.time()
+        
         for (x, y), (deco_type, angle) in dungeon.decorations.items():
-            if (x, y) in visible_tiles:
-                sprite = sprite_manager.get_decoration_sprite(deco_type)
-                if sprite:
-                    if angle != 0:
-                        sprite = pygame.transform.rotate(sprite, angle)
-                    self._draw_sprite(x, y, sprite)
+            if (x, y) not in visible_tiles:
+                continue
+            
+            # Verificar si es una decoración animada (múltiples frames)
+            if sprite_manager.is_animated_decoration(deco_type):
+                frames = sprite_manager.get_animated_decoration_frames(deco_type)
+                if frames:
+                    # Ciclar frames: ~200ms por frame
+                    frame_index = int(current_time / 0.2) % len(frames)
+                    self._draw_sprite(x, y, frames[frame_index])
+                continue
+            
+            # Efecto relámpago para ventanas
+            if deco_type == "ventanas" and self._lightning_effect:
+                alpha = self._lightning_effect.get_alpha()
+                if self._lightning_effect.did_trigger():
+                    music_manager.play_sound("storm_sound.mp3")
+                if alpha > 0:
+                    sprite = sprite_manager.get_decoration_sprite(deco_type)
+                    if sprite:
+                        flash_sprite = sprite.copy()
+                        flash_sprite.set_alpha(alpha)
+                        self._draw_sprite(x, y, flash_sprite)
+                continue
+            
+            # Decoración estática normal
+            sprite = sprite_manager.get_decoration_sprite(deco_type)
+            if sprite:
+                if angle != 0:
+                    sprite = pygame.transform.rotate(sprite, angle)
+                self._draw_sprite(x, y, sprite)
     
     def _render_entities(self, dungeon: Dungeon, visible_tiles: Set[Tuple[int, int]]) -> None:
         """Renderiza las entidades (monstruos)."""
@@ -335,138 +466,515 @@ class Renderer:
             arrow_down = self.font.render("\u25bc", True, COLORS["gray"])
             self.screen.blit(arrow_down, (indicator_x, y + height - FONT_SIZE - 2))
     
+    # ── Constantes de grid UI ─────────────────────────────────────
+    _GRID_CELL = 48          # Píxeles por celda del grid
+    _GRID_PAD = 1            # Espacio entre celdas (1px = línea fina)
+    _GRID_BORDER = 1         # Grosor del borde de celda
+
+    # Colores del grid
+    _COL_CELL_EMPTY = (20, 20, 28)
+    _COL_CELL_BORDER = (40, 40, 48)
+    _COL_GRID_BG = (30, 30, 38)       # Fondo del grid (líneas divisorias)
+    _COL_CONTEXT_BG = (35, 35, 45)    # Fondo del menú contextual
+    _COL_CONTEXT_HOVER = (60, 60, 80) # Hover del menú contextual
+    _COL_DROP_ZONE = (80, 30, 30)     # Color de zona de soltar (rojo tenue)
+    _COL_ITEM_POTION = (15, 50, 50)
+    _COL_ITEM_WEAPON = (40, 40, 50)
+    _COL_ITEM_ARMOR = (45, 30, 18)
+    _COL_ITEM_SPECIAL = (45, 15, 50)
+    _COL_ITEM_DEFAULT = (30, 30, 38)
+    _COL_SELECTED = (255, 255, 255)
+    _COL_EQUIPPED = (255, 215, 0)         # Gold
+    _COL_EQUIPPED_BG = (50, 43, 10)
+
+    def _get_item_bg_color(self, item) -> tuple:
+        """Devuelve un color de fondo según el tipo de item."""
+        t = getattr(item, 'item_type', '')
+        if t == 'potion':
+            return self._COL_ITEM_POTION
+        elif t == 'weapon':
+            return self._COL_ITEM_WEAPON
+        elif t == 'armor':
+            return self._COL_ITEM_ARMOR
+        elif t in ('amulet', 'gold', 'special', 'key'):
+            return self._COL_ITEM_SPECIAL
+        return self._COL_ITEM_DEFAULT
+
     def _render_inventory(
-        self, 
-        player: Player, 
+        self,
+        player: Player,
         mode: str = "normal",
         cursor: int = 0,
-        scroll: int = 0
+        scroll: int = 0,
+        drag_item: object = None,
+        drag_mouse_pos: tuple = (0, 0),
+        context_menu: dict = None,
+        hover_item: object = None,
     ) -> None:
-        """Renderiza la pantalla de inventario con navegación."""
-        # Overlay semi-transparente
+        """
+        Renderiza la pantalla de inventario grid estilo RE4 / Tarkov.
+
+        Dibuja:
+        - Grid 2D con items ocupando celdas según sus dimensiones
+        - Panel de equipamiento a la derecha
+        - Tooltip/descripción del item bajo el cursor (hover)
+        - Item arrastrado (ghost) siguiendo el ratón
+        - Menú contextual (click derecho)
+        """
+        cell = self._GRID_CELL
+        pad = self._GRID_PAD
+        grid_cols = GRID_INVENTORY_WIDTH   # 10
+        grid_rows = GRID_INVENTORY_HEIGHT  # 5
+
+        # ── Dimensiones del panel ────────────────────────────
+        grid_pixel_w = grid_cols * (cell + pad) + pad
+        grid_pixel_h = grid_rows * (cell + pad) + pad
+        equip_panel_w = 210
+        tooltip_h = 70
+        header_h = 12
+        footer_h = 10
+
+        inv_width = grid_pixel_w + 20 + equip_panel_w + 30   # padding
+        inv_height = header_h + grid_pixel_h + 12 + tooltip_h + footer_h + 10
+        inv_x = (WINDOW_WIDTH - inv_width) // 2
+        inv_y = (WINDOW_HEIGHT - inv_height) // 2
+
+        # ── Overlay ──────────────────────────────────────────
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
         overlay.fill(COLORS["black"])
         overlay.set_alpha(200)
         self.screen.blit(overlay, (0, 0))
-        
-        # Ventana de inventario más grande
-        inv_width = 550
-        inv_height = 500
+
+        # ── Panel de fondo ───────────────────────────────────
+        pygame.draw.rect(self.screen, COLORS["darker_gray"],
+                         (inv_x, inv_y, inv_width, inv_height))
+        pygame.draw.rect(self.screen, COLORS["white"],
+                         (inv_x, inv_y, inv_width, inv_height), 2)
+
+        # (Sin título ni instrucciones — la interfaz se explica sola)
+
+        # ── Origen del grid ──────────────────────────────────
+        grid_x0 = inv_x + 15
+        grid_y0 = inv_y + header_h
+
+        # Referencia al grid del jugador
+        grid_inv = player.grid_inventory
+        items_list = grid_inv.get_all_items()
+
+        # Item para tooltip: el que está bajo el ratón (hover), o el del cursor
+        selected_item = hover_item if hover_item else (
+            items_list[cursor] if 0 <= cursor < len(items_list) else None
+        )
+
+        # Conjunto de items equipados para marcarlos visualmente
+        equipped_items = set()
+        for eq in player.equipped.values():
+            if eq is not None:
+                equipped_items.add(id(eq))
+
+        # ── Dibujar grid (fondo continuo + celdas) ────────────
+        # Fondo del grid completo (las líneas finas son el "hueco" entre celdas)
+        pygame.draw.rect(self.screen, self._COL_CELL_BORDER,
+                         (grid_x0, grid_y0, grid_pixel_w, grid_pixel_h))
+        # Dibujar celdas sobre el fondo → las líneas divisorias son los huecos de 1px
+        for gx in range(grid_cols):
+            for gy in range(grid_rows):
+                px = grid_x0 + gx * (cell + pad) + pad
+                py = grid_y0 + gy * (cell + pad) + pad
+                pygame.draw.rect(self.screen, self._COL_CELL_EMPTY,
+                                 (px, py, cell, cell))
+
+        # ── Dibujar items en el grid ─────────────────────────
+        drawn_items: set = set()
+        for item_id, (gx, gy, item) in grid_inv._items.items():
+            if item_id in drawn_items:
+                continue
+            drawn_items.add(item_id)
+
+            # Si el item está siendo arrastrado, no dibujarlo en el grid
+            if drag_item is not None and item is drag_item:
+                continue
+
+            w = getattr(item, 'grid_width', 1)
+            h = getattr(item, 'grid_height', 1)
+
+            # Posición en píxeles del bloque completo del item
+            ipx = grid_x0 + gx * (cell + pad) + pad
+            ipy = grid_y0 + gy * (cell + pad) + pad
+            ipw = w * (cell + pad) - pad
+            iph = h * (cell + pad) - pad
+
+            is_equipped = id(item) in equipped_items
+            is_selected = item is selected_item
+
+            # Fondo del item
+            bg = self._COL_EQUIPPED_BG if is_equipped else self._get_item_bg_color(item)
+            pygame.draw.rect(self.screen, bg, (ipx, ipy, ipw, iph))
+
+            # Borde del item
+            if is_selected:
+                border_color = self._COL_SELECTED
+                border_w = 2
+            elif is_equipped:
+                border_color = self._COL_EQUIPPED
+                border_w = 2
+            else:
+                border_color = self._COL_CELL_BORDER
+                border_w = 1
+            pygame.draw.rect(self.screen, border_color,
+                             (ipx, ipy, ipw, iph), border_w)
+
+            # ── Sprite del item (centrado, escalado) ─────────
+            sprite = None
+            sprite_key = getattr(item, 'sprite', None)
+            if sprite_key:
+                sprite = sprite_manager.get_item_sprite(sprite_key)
+            if not sprite:
+                sprite = sprite_manager.get_item_sprite(
+                    getattr(item, 'item_type', ''))
+
+            if sprite:
+                # Escalar sprite para que quepa bien (max 80% del área)
+                max_w = int(ipw * 0.8)
+                max_h = int(iph * 0.8)
+                sw, sh = sprite.get_width(), sprite.get_height()
+                scale = min(max_w / sw, max_h / sh, 3.0)  # Máx ×3
+                new_w = max(1, int(sw * scale))
+                new_h = max(1, int(sh * scale))
+                scaled = pygame.transform.scale(sprite, (new_w, new_h))
+                sx = ipx + (ipw - new_w) // 2
+                sy = ipy + (iph - new_h) // 2 - 4  # Un poco arriba para dejar espacio al nombre
+                self.screen.blit(scaled, (sx, sy))
+            else:
+                # Fallback: dibujar el carácter del item (grande)
+                ch = getattr(item, 'char', '?')
+                item_color = COLORS.get(getattr(item, 'color', 'white'), COLORS["white"])
+                try:
+                    big_font = pygame.font.SysFont(FONT_NAME, min(cell - 8, 28), bold=True)
+                except Exception:
+                    big_font = pygame.font.Font(None, min(cell - 8, 28))
+                ch_surface = big_font.render(ch, True, item_color)
+                cx = ipx + (ipw - ch_surface.get_width()) // 2
+                cy = ipy + (iph - ch_surface.get_height()) // 2 - 4
+                self.screen.blit(ch_surface, (cx, cy))
+
+            # ── Nombre del item (abajo del sprite) ───────────
+            try:
+                name_font = pygame.font.SysFont(FONT_NAME, 10)
+            except Exception:
+                name_font = pygame.font.Font(None, 10)
+            # Truncar nombre si es muy largo
+            display_name = item.name
+            if name_font.size(display_name)[0] > ipw - 4:
+                while len(display_name) > 3 and name_font.size(display_name + "..")[0] > ipw - 4:
+                    display_name = display_name[:-1]
+                display_name += ".."
+            name_surface = name_font.render(display_name, True, COLORS["white"])
+            nx = ipx + (ipw - name_surface.get_width()) // 2
+            ny = ipy + iph - name_surface.get_height() - 2
+            self.screen.blit(name_surface, (nx, ny))
+
+            # Indicador "E" si está equipado (esquina superior-derecha)
+            if is_equipped:
+                try:
+                    eq_font = pygame.font.SysFont(FONT_NAME, 10, bold=True)
+                except Exception:
+                    eq_font = pygame.font.Font(None, 10)
+                eq_surf = eq_font.render("E", True, self._COL_EQUIPPED)
+                self.screen.blit(eq_surf, (ipx + ipw - eq_surf.get_width() - 3, ipy + 2))
+
+        # ── Panel de equipamiento (derecha del grid) ─────────
+        equip_x = grid_x0 + grid_pixel_w + 12
+        equip_y = grid_y0
+
+        # Fondo del panel de equipo
+        pygame.draw.rect(self.screen, (25, 25, 32),
+                         (equip_x, equip_y, equip_panel_w, grid_pixel_h))
+        pygame.draw.rect(self.screen, COLORS["gray"],
+                         (equip_x, equip_y, equip_panel_w, grid_pixel_h), 1)
+
+        # Título
+        eq_title = "EQUIPADO"
+        eq_title_surface = self.font.render(eq_title, True, COLORS["white"])
+        self.screen.blit(eq_title_surface,
+                         (equip_x + (equip_panel_w - eq_title_surface.get_width()) // 2,
+                          equip_y + 8))
+
+        # Slots de equipo
+        slot_names = {
+            "weapon": "Arma",
+            "armor": "Armadura",
+            "ring_left": "Anillo Izq.",
+            "ring_right": "Anillo Der.",
+        }
+        line_h = FONT_SIZE + 6
+        ey = equip_y + 35
+        for slot, item in player.equipped.items():
+            label = slot_names.get(slot, slot)
+            if item:
+                eq_text = f"{label}: {item.name}"
+                color = self._COL_EQUIPPED
+            else:
+                eq_text = f"{label}: ---"
+                color = COLORS["gray"]
+
+            # Truncar si es muy largo
+            eq_surface = self.font.render(eq_text, True, color)
+            if eq_surface.get_width() > equip_panel_w - 16:
+                while len(eq_text) > 8 and self.font.size(eq_text + "..")[0] > equip_panel_w - 16:
+                    eq_text = eq_text[:-1]
+                eq_text += ".."
+                eq_surface = self.font.render(eq_text, True, color)
+            self.screen.blit(eq_surface, (equip_x + 8, ey))
+            ey += line_h
+
+        # ── Tooltip / descripción (debajo del grid) ──────────
+        tooltip_x = grid_x0
+        tooltip_y = grid_y0 + grid_pixel_h + 8
+        tooltip_w = inv_width - 30
+        pygame.draw.rect(self.screen, (18, 18, 24),
+                         (tooltip_x, tooltip_y, tooltip_w, tooltip_h))
+        pygame.draw.rect(self.screen, COLORS["gray"],
+                         (tooltip_x, tooltip_y, tooltip_w, tooltip_h), 1)
+
+        if selected_item:
+            # Nombre del item seleccionado
+            sel_name = selected_item.name
+            is_eq = id(selected_item) in equipped_items
+            if is_eq:
+                sel_name += "  (equipado)"
+            name_color = self._COL_EQUIPPED if is_eq else COLORS["white"]
+            name_surf = self.font.render(sel_name, True, name_color)
+            self.screen.blit(name_surf, (tooltip_x + 10, tooltip_y + 6))
+
+            # Descripción
+            desc = getattr(selected_item, 'description', '') or ''
+            if not desc:
+                desc = getattr(selected_item, '_description', '') or ''
+
+            # Stats extras
+            stats_parts = []
+            atk = getattr(selected_item, 'attack_bonus', 0)
+            dfn = getattr(selected_item, 'defense_bonus', 0)
+            if atk:
+                stats_parts.append(f"+{atk} ATK")
+            if dfn:
+                stats_parts.append(f"+{dfn} DEF")
+            dur = getattr(selected_item, 'durability', None)
+            max_dur = getattr(selected_item, 'max_durability', None)
+            if dur is not None and max_dur is not None:
+                stats_parts.append(f"Dur: {dur}/{max_dur}")
+            heal_val = getattr(selected_item, 'heal_amount', 0)
+            if heal_val:
+                stats_parts.append(f"Cura {heal_val} HP")
+
+            stats_str = "  |  ".join(stats_parts) if stats_parts else ""
+
+            try:
+                desc_font = pygame.font.SysFont(FONT_NAME, FONT_SIZE - 2)
+            except Exception:
+                desc_font = pygame.font.Font(None, FONT_SIZE - 2)
+
+            if desc:
+                desc_surf = desc_font.render(desc, True, COLORS["message"])
+                self.screen.blit(desc_surf, (tooltip_x + 10, tooltip_y + 26))
+            if stats_str:
+                stats_surf = desc_font.render(stats_str, True, COLORS["message_heal"])
+                self.screen.blit(stats_surf, (tooltip_x + 10, tooltip_y + 46))
+        # (Sin texto cuando no hay item seleccionado — tooltip vacío)
+
+        # ── Ghost del item arrastrado (sigue al ratón) ─────
+        if drag_item is not None:
+            mx, my = drag_mouse_pos
+            dw = getattr(drag_item, 'grid_width', 1)
+            dh = getattr(drag_item, 'grid_height', 1)
+            ghost_w = dw * (cell + pad) - pad
+            ghost_h = dh * (cell + pad) - pad
+            ghost_x = mx - ghost_w // 2
+            ghost_y = my - ghost_h // 2
+
+            # ¿El ratón está sobre el grid?
+            on_grid = (grid_x0 <= mx <= grid_x0 + grid_pixel_w and
+                       grid_y0 <= my <= grid_y0 + grid_pixel_h)
+
+            # Superficie semi-transparente
+            ghost_surf = pygame.Surface((ghost_w, ghost_h), pygame.SRCALPHA)
+            bg_color = self._get_item_bg_color(drag_item)
+            ghost_surf.fill((*bg_color, 160))
+
+            # Dibujar sprite sobre el ghost
+            sprite = None
+            sprite_key = getattr(drag_item, 'sprite', None)
+            if sprite_key:
+                sprite = sprite_manager.get_item_sprite(sprite_key)
+            if not sprite:
+                sprite = sprite_manager.get_item_sprite(
+                    getattr(drag_item, 'item_type', ''))
+            if sprite:
+                max_sw = int(ghost_w * 0.8)
+                max_sh = int(ghost_h * 0.8)
+                sw, sh = sprite.get_width(), sprite.get_height()
+                scale = min(max_sw / sw, max_sh / sh, 3.0)
+                new_w = max(1, int(sw * scale))
+                new_h = max(1, int(sh * scale))
+                scaled = pygame.transform.scale(sprite, (new_w, new_h))
+                ghost_surf.blit(scaled, ((ghost_w - new_w) // 2,
+                                          (ghost_h - new_h) // 2 - 4))
+            else:
+                ch = getattr(drag_item, 'char', '?')
+                item_color = COLORS.get(getattr(drag_item, 'color', 'white'), COLORS["white"])
+                try:
+                    big_font = pygame.font.SysFont(FONT_NAME, min(cell - 8, 28), bold=True)
+                except Exception:
+                    big_font = pygame.font.Font(None, min(cell - 8, 28))
+                ch_surface = big_font.render(ch, True, item_color)
+                ghost_surf.blit(ch_surface, ((ghost_w - ch_surface.get_width()) // 2,
+                                              (ghost_h - ch_surface.get_height()) // 2))
+
+            self.screen.blit(ghost_surf, (ghost_x, ghost_y))
+
+            # Borde del ghost
+            border_color = COLORS["white"] if on_grid else (200, 60, 60)
+            pygame.draw.rect(self.screen, border_color,
+                             (ghost_x, ghost_y, ghost_w, ghost_h), 2)
+
+            # Indicador "soltar" si fuera del grid
+            if not on_grid:
+                try:
+                    drop_font = pygame.font.SysFont(FONT_NAME, 12, bold=True)
+                except Exception:
+                    drop_font = pygame.font.Font(None, 12)
+                drop_label = drop_font.render("SOLTAR", True, (255, 80, 80))
+                self.screen.blit(drop_label, (ghost_x + (ghost_w - drop_label.get_width()) // 2,
+                                               ghost_y + ghost_h + 4))
+
+        # ── Menú contextual (click derecho) ────────────────
+        if context_menu is not None:
+            cm_x = context_menu.get("pixel_x", 0)
+            cm_y = context_menu.get("pixel_y", 0)
+            cm_options = context_menu.get("options", [])
+
+            if cm_options:
+                cm_w = 140
+                cm_line_h = 28
+                cm_h = len(cm_options) * cm_line_h + 8
+
+                # Ajustar para no salir de pantalla
+                if cm_x + cm_w > WINDOW_WIDTH:
+                    cm_x = WINDOW_WIDTH - cm_w - 4
+                if cm_y + cm_h > WINDOW_HEIGHT:
+                    cm_y = WINDOW_HEIGHT - cm_h - 4
+
+                # Fondo
+                pygame.draw.rect(self.screen, self._COL_CONTEXT_BG,
+                                 (cm_x, cm_y, cm_w, cm_h))
+                pygame.draw.rect(self.screen, COLORS["white"],
+                                 (cm_x, cm_y, cm_w, cm_h), 1)
+
+                # Detectar hover del ratón sobre las opciones
+                mouse_pos = pygame.mouse.get_pos()
+                try:
+                    cm_font = pygame.font.SysFont(FONT_NAME, FONT_SIZE, bold=False)
+                except Exception:
+                    cm_font = pygame.font.Font(None, FONT_SIZE)
+
+                for i, opt in enumerate(cm_options):
+                    opt_y = cm_y + 4 + i * cm_line_h
+                    opt_rect = pygame.Rect(cm_x + 2, opt_y, cm_w - 4, cm_line_h)
+
+                    # Highlight si el ratón está sobre esta opción
+                    if opt_rect.collidepoint(mouse_pos):
+                        pygame.draw.rect(self.screen, self._COL_CONTEXT_HOVER, opt_rect)
+
+                    opt_surface = cm_font.render(opt["label"], True, COLORS["white"])
+                    self.screen.blit(opt_surface, (cm_x + 10, opt_y + (cm_line_h - opt_surface.get_height()) // 2))
+
+    # ── Helpers del grid (pixel ↔ celda) ──────────────────────────
+
+    def get_grid_layout(self) -> dict:
+        """
+        Retorna las coordenadas del grid de inventario en pantalla.
+        Necesario para que game.py convierta posiciones de ratón a celdas.
+        """
+        cell = self._GRID_CELL
+        pad = self._GRID_PAD
+        grid_cols = GRID_INVENTORY_WIDTH
+        grid_rows = GRID_INVENTORY_HEIGHT
+
+        grid_pixel_w = grid_cols * (cell + pad) + pad
+        grid_pixel_h = grid_rows * (cell + pad) + pad
+        equip_panel_w = 210
+        tooltip_h = 70
+        header_h = 12
+        footer_h = 10
+
+        inv_width = grid_pixel_w + 20 + equip_panel_w + 30
+        inv_height = header_h + grid_pixel_h + 12 + tooltip_h + footer_h + 10
         inv_x = (WINDOW_WIDTH - inv_width) // 2
         inv_y = (WINDOW_HEIGHT - inv_height) // 2
-        
-        pygame.draw.rect(
-            self.screen,
-            COLORS["darker_gray"],
-            (inv_x, inv_y, inv_width, inv_height)
-        )
-        pygame.draw.rect(
-            self.screen,
-            COLORS["white"],
-            (inv_x, inv_y, inv_width, inv_height),
-            2
-        )
-        
-        # Título con modo actual
-        mode_text = {
-            "normal": "",
-            "drop": " [SOLTAR]"
+
+        grid_x0 = inv_x + 15
+        grid_y0 = inv_y + header_h
+
+        return {
+            "cell": cell,
+            "pad": pad,
+            "grid_cols": grid_cols,
+            "grid_rows": grid_rows,
+            "grid_x0": grid_x0,
+            "grid_y0": grid_y0,
+            "grid_pixel_w": grid_pixel_w,
+            "grid_pixel_h": grid_pixel_h,
+            "inv_x": inv_x,
+            "inv_y": inv_y,
+            "inv_width": inv_width,
+            "inv_height": inv_height,
         }
-        title = f"=== INVENTARIO{mode_text.get(mode, '')} ==="
-        title_color = COLORS["message_important"] if mode != "normal" else COLORS["white"]
-        title_surface = self.font.render(title, True, title_color)
-        self.screen.blit(
-            title_surface,
-            (inv_x + (inv_width - title_surface.get_width()) // 2, inv_y + 10)
-        )
-        
-        # Instrucciones simplificadas
-        line1 = "↑↓ Navegar    ENTER Activar    [D] Soltar    ESC Cerrar"
-        
-        line1_surface = self.font.render(line1, True, COLORS["gray"])
-        self.screen.blit(line1_surface, (inv_x + 20, inv_y + 35))
-        
-        # Items del inventario
-        from ..systems.inventory import Inventory
-        items = Inventory.get_inventory_display(player)
-        
-        y_offset = inv_y + 58  # Espacio para la línea de instrucciones
-        line_height = FONT_SIZE + 6
-        max_visible = 12  # Items visibles
-        
-        if not items:
-            empty_text = "El inventario está vacío."
-            empty_surface = self.font.render(empty_text, True, COLORS["gray"])
-            self.screen.blit(empty_surface, (inv_x + 20, y_offset))
-        else:
-            # Indicador de scroll arriba
-            if scroll > 0:
-                scroll_up = "▲ Más items arriba ▲"
-                scroll_surface = self.font.render(scroll_up, True, COLORS["gray"])
-                self.screen.blit(scroll_surface, (inv_x + 20, y_offset - 2))
-            
-            y_offset += 5
-            
-            # Mostrar solo los items visibles según scroll
-            visible_items = items[scroll:scroll + max_visible]
-            
-            for i, (letter, name, equipped) in enumerate(visible_items):
-                actual_index = scroll + i
-                is_selected = (actual_index == cursor)
-                
-                # Fondo de selección
-                if is_selected:
-                    selection_rect = pygame.Rect(
-                        inv_x + 15, 
-                        y_offset - 2, 
-                        inv_width - 30, 
-                        line_height
-                    )
-                    pygame.draw.rect(self.screen, COLORS["gray"], selection_rect)
-                
-                # Indicador de selección
-                prefix = "► " if is_selected else "  "
-                
-                # Color del texto
-                if is_selected:
-                    color = COLORS["black"]
-                elif equipped:
-                    color = COLORS["message_important"]
-                else:
-                    color = COLORS["white"]
-                
-                item_text = f"{prefix}{letter}) {name}"
-                item_surface = self.font.render(item_text, True, color)
-                self.screen.blit(item_surface, (inv_x + 20, y_offset))
-                y_offset += line_height
-            
-            # Indicador de scroll abajo
-            if scroll + max_visible < len(items):
-                scroll_down = "▼ Más items abajo ▼"
-                scroll_surface = self.font.render(scroll_down, True, COLORS["gray"])
-                self.screen.blit(scroll_surface, (inv_x + 20, y_offset + 5))
-            
-            # Mostrar total de items (esquina superior derecha)
-            total_text = f"[{len(items)}/26]"
-            total_surface = self.font.render(total_text, True, COLORS["gray"])
-            self.screen.blit(total_surface, (inv_x + inv_width - 70, inv_y + 12))
-        
-        # Equipamiento (más abajo)
-        y_offset = inv_y + 320
-        equip_title = "=== EQUIPADO ==="
-        equip_surface = self.font.render(equip_title, True, COLORS["white"])
-        self.screen.blit(equip_surface, (inv_x + 20, y_offset))
-        
-        y_offset += line_height + 5
-        equipment = Inventory.get_equipment_display(player)
-        
-        for slot_name, item_name in equipment:
-            equip_text = f"{slot_name}: {item_name}"
-            color = COLORS["white"] if item_name != "---" else COLORS["gray"]
-            equip_surface = self.font.render(equip_text, True, color)
-            self.screen.blit(equip_surface, (inv_x + 20, y_offset))
-            y_offset += line_height
-    
+
+    def pixel_to_grid_cell(self, px: int, py: int) -> Tuple[int, int]:
+        """
+        Convierte coordenadas de pantalla a celda del grid.
+        Retorna (-1, -1) si está fuera del grid.
+        """
+        layout = self.get_grid_layout()
+        cell = layout["cell"]
+        pad = layout["pad"]
+        gx0 = layout["grid_x0"]
+        gy0 = layout["grid_y0"]
+
+        rx = px - gx0
+        ry = py - gy0
+
+        if rx < 0 or ry < 0:
+            return (-1, -1)
+
+        col = rx // (cell + pad)
+        row = ry // (cell + pad)
+
+        if col < 0 or col >= layout["grid_cols"] or row < 0 or row >= layout["grid_rows"]:
+            return (-1, -1)
+
+        # Verificar que no estamos en el "padding" entre celdas
+        local_x = rx - col * (cell + pad)
+        local_y = ry - row * (cell + pad)
+        if local_x < pad or local_y < pad:
+            # Estamos en la línea divisoria, snap a la celda más cercana
+            pass  # Aún así retornamos la celda, es más usable
+
+        return (int(col), int(row))
+
+    def is_pixel_on_grid(self, px: int, py: int) -> bool:
+        """Verifica si un pixel está dentro del área del grid."""
+        layout = self.get_grid_layout()
+        return (layout["grid_x0"] <= px <= layout["grid_x0"] + layout["grid_pixel_w"] and
+                layout["grid_y0"] <= py <= layout["grid_y0"] + layout["grid_pixel_h"])
+
+    def is_pixel_on_inventory_window(self, px: int, py: int) -> bool:
+        """Verifica si un pixel está dentro de la ventana de inventario."""
+        layout = self.get_grid_layout()
+        return (layout["inv_x"] <= px <= layout["inv_x"] + layout["inv_width"] and
+                layout["inv_y"] <= py <= layout["inv_y"] + layout["inv_height"])
+
     def _render_shop(
         self,
         player: Player,
