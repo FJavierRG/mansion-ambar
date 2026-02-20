@@ -23,6 +23,9 @@ def register_all_game_events() -> None:
     
     # Registrar evento de primera moneda recogida (desbloquea Comerciante Errante)
     register_first_gold_pickup_event()
+    
+    # Registrar evento de primera poción comprada (desbloquea Bibliotecario)
+    register_first_potion_bought_event()
 
 
 def register_stranger_event() -> None:
@@ -356,3 +359,49 @@ def register_first_gold_pickup_event() -> None:
     )
     
     event_manager.register_event(event_first_gold)
+
+
+def register_first_potion_bought_event() -> None:
+    """
+    Registra el evento de primera poción comprada al mercader.
+    
+    Se activa cuando el jugador compra su primera poción en la tienda
+    del Comerciante (dungeon). Desbloquea al Bibliotecario.
+    """
+    event_first_potion = GameEvent(
+        event_id="merchant_first_potion_bought",
+        name="Primera poción comprada",
+        description="El jugador compró su primera poción al mercader",
+        persistent=True,
+        auto_trigger=False  # Se activa manualmente desde game.py (shop handler)
+    )
+    
+    # Evento: Bibliotecario conocido en dungeon
+    event_librarian_met = GameEvent(
+        event_id="librarian_dungeon_met",
+        name="Conociste al Bibliotecario",
+        description="Hablaste con el Bibliotecario en los túneles",
+        persistent=True,
+        auto_trigger=False
+    )
+    
+    # Acción: eliminar Bibliotecario y Hermes del dungeon al hablar
+    event_librarian_met.actions.append(
+        action_remove_entity_from_zone("Bibliotecario", zone_type="dungeon")
+    )
+    event_librarian_met.actions.append(
+        action_remove_entity_from_zone("Hermes", zone_type="dungeon")
+    )
+    
+    # Evento: Diálogo del lobby completado
+    event_librarian_lobby = GameEvent(
+        event_id="librarian_lobby_dialog_completed",
+        name="Bibliotecario - diálogo lobby",
+        description="Completaste la conversación con el Bibliotecario en el lobby",
+        persistent=True,
+        auto_trigger=False
+    )
+    
+    event_manager.register_event(event_first_potion)
+    event_manager.register_event(event_librarian_met)
+    event_manager.register_event(event_librarian_lobby)

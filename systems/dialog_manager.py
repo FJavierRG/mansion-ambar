@@ -108,6 +108,8 @@ class DialogManager:
         self.text_type = TextType.DIALOG
         # Asegurar que selected_option apunta a una opción disponible
         self._ensure_selected_option_available()
+        # Ejecutar on_enter del nodo inicial
+        self._trigger_on_enter()
         return True
     
     def start_text(self, text_content: TextContent) -> None:
@@ -292,6 +294,8 @@ class DialogManager:
             self._process_node_with_separators()
             # Asegurar que selected_option apunta a una opción disponible
             self._ensure_selected_option_available()
+            # Ejecutar on_enter del nuevo nodo
+            self._trigger_on_enter()
             return True
         else:
             self.close()
@@ -411,6 +415,15 @@ class DialogManager:
             True si es texto simple
         """
         return self.text_type == TextType.SIMPLE
+    
+    def _trigger_on_enter(self) -> None:
+        """Ejecuta el callback on_enter del nodo actual, si existe."""
+        node = self.get_current_node()
+        if node and node.on_enter:
+            try:
+                node.on_enter()
+            except Exception as e:
+                print(f"[DialogManager] Error en on_enter del nodo '{node.node_id}': {e}")
 
 
 # Instancia global del gestor

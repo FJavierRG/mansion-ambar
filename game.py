@@ -1027,6 +1027,8 @@ class Game:
         
         elif key == pygame.K_RETURN or key == pygame.K_KP_ENTER:
             if item_count > 0:
+                # Capturar item_id antes de comprar (el stock puede eliminarlo)
+                purchased_item_id = self.current_shop.items[self.shop_cursor].item_id
                 success, message = self.current_shop.buy_item(self.player, self.shop_cursor)
                 self.message_log.add(
                     message,
@@ -1034,6 +1036,14 @@ class Game:
                 )
                 if success:
                     music_manager.play_sound("UI-select.mp3", volume=0.4)
+                    # Disparar evento de primera poción comprada (desbloquea Bibliotecario)
+                    from roguelike.config import POTION_DATA
+                    if purchased_item_id in POTION_DATA:
+                        if not event_manager.is_event_triggered("merchant_first_potion_bought"):
+                            event_manager.trigger_event(
+                                "merchant_first_potion_bought",
+                                self.player, self.dungeon, skip_conditions=True
+                            )
                     # Ajustar cursor si se eliminó un item agotado
                     new_count = self.current_shop.get_item_count()
                     if new_count == 0:

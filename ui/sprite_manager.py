@@ -42,6 +42,8 @@ class SpriteManager:
         "alquimista": "alchemist.png",  # Alquimista
         "comerciante": "merchant.png",  # Comerciante (32x32, no escalar)
         "comerciante errante": "merchant_wanderer.png",  # Comerciante Errante (lobby)
+        "bibliotecario": "librarian.png",  # Bibliotecario (NPC lore)
+        "hermes": "dog.png",  # Hermes, el perro del Bibliotecario
     }
     
     # Sprites de decoración del suelo (sangre, etc.)
@@ -210,7 +212,8 @@ class SpriteManager:
         """
         # Lista de NPCs conocidos (basado en la estructura de carpetas)
         npc_types = {"player", "stranger", "stranger_dead", "nieta", "nieta_dead", 
-                     "alquimista", "comerciante", "comerciante errante"}
+                     "alquimista", "comerciante", "comerciante errante",
+                     "bibliotecario", "hermes"}
         
         # Determinar en qué subcarpeta buscar
         if creature_type in npc_types:

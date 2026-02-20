@@ -154,6 +154,14 @@ class DevCommandManager:
             self._cmd_merchant
         )
         
+        # Comando: librarian
+        self.register_command(
+            "librarian",
+            "Fuerza aparición del Bibliotecario en plantas impares (100%, esta run)",
+            "librarian",
+            self._cmd_librarian
+        )
+        
         # Comando: shop_donate
         self.register_command(
             "shop_donate",
@@ -777,6 +785,15 @@ class DevCommandManager:
             "Este cambio NO se guarda. Se resetea al morir o cerrar."
         ]
     
+    def _cmd_librarian(self, _game: 'Game', _args: List[str]) -> List[str]:
+        """Comando: librarian — Fuerza aparición del Bibliotecario al 100% en plantas impares (solo esta run)."""
+        from ..content.npcs import librarian as librarian_module
+        librarian_module._dev_force_spawn = True
+        return [
+            "[DEV] Bibliotecario forzado al 100% en plantas impares.",
+            "Este cambio NO se guarda. Se resetea al morir o cerrar."
+        ]
+    
     def _cmd_shop_donate(self, _game: 'Game', args: List[str]) -> List[str]:
         """Comando: shop_donate [cantidad] — Muestra estado o establece total donado."""
         from ..systems.events import event_manager
@@ -1117,6 +1134,27 @@ class DevCommandManager:
             "event_data": {
                 "mision_capturar_nieta_completed_at_run": "run-3",
             },
+        },
+        # ── BIBLIOTECARIO ────────────────────────────────────────
+        "bibliotecario_primera_poti": {
+            "desc": "Simula compra de primera poción (Bibliotecario aparece en impares)",
+            "events": [
+                "first_gold_pickup",
+                "merchant_first_potion_bought",
+            ],
+            "states": [("Bibliotecario", "dungeon_encounter")],
+        },
+        "bibliotecario_lobby": {
+            "desc": "Bibliotecario en lobby tras encuentro en dungeon",
+            "events": [
+                "first_gold_pickup",
+                "merchant_first_potion_bought",
+                "librarian_dungeon_met",
+            ],
+            "states": [
+                ("Bibliotecario", "lobby_rest"),
+                ("Hermes", "with_librarian_lobby"),
+            ],
         },
     }
     

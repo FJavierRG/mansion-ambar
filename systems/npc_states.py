@@ -520,9 +520,12 @@ class NPCStateManager:
                 )
                 if companion:
                     pos = self._get_adjacent_position(zone, companion.x, companion.y)
-                # Si no hay compañero o no hay espacio adyacente, posición aleatoria
-                if not pos:
-                    pos = self._get_random_spawn_position(zone, state_config)
+                    # Si no hay espacio adyacente, posición aleatoria cerca
+                    if not pos:
+                        pos = self._get_random_spawn_position(zone, state_config)
+                else:
+                    # Sin compañero en la zona → no spawnear
+                    continue
             else:
                 pos = self._get_random_spawn_position(zone, state_config)
             

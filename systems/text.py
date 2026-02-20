@@ -47,12 +47,14 @@ class DialogNode:
         text: Texto del diálogo (puede ser multilínea con \n)
         options: Lista de opciones disponibles
         auto_advance: Si es True, avanza automáticamente sin opciones
+        on_enter: Función que se ejecuta al entrar al nodo (None = sin acción)
     """
     node_id: str
     speaker: Optional[str]
     text: str
     options: List[DialogOption]
     auto_advance: bool = False
+    on_enter: Optional[Callable[[], None]] = None
 
 
 class DialogTree:
