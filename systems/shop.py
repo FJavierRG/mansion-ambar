@@ -9,7 +9,7 @@ Ejemplo de uso externo (usando la factoría de items):
     from roguelike.systems.shop import get_merchant_shop, create_shop_item
 
     shop = get_merchant_shop()
-    shop.add_item(create_shop_item("dagger", price=50, stock=1))
+    shop.add_item(create_shop_item("dagger", stock=1))
     shop.remove_item("Poción de Vida")
 """
 from __future__ import annotations
@@ -122,9 +122,29 @@ def _auto_name(item_id: str) -> str:
     return names.get(item_id, item_id)
 
 
+def get_item_price(item_id: str) -> int:
+    """
+    Obtiene el precio de un item desde sus datos en config.py.
+    
+    Busca el campo 'price' en POTION_DATA, WEAPON_DATA y ARMOR_DATA.
+    
+    Args:
+        item_id: Identificador del item en la factoría
+        
+    Returns:
+        Precio del item en oro, o 0 si no se encuentra
+    """
+    from ..config import POTION_DATA, WEAPON_DATA, ARMOR_DATA
+    
+    for registry in (POTION_DATA, WEAPON_DATA, ARMOR_DATA):
+        if item_id in registry:
+            return registry[item_id].get("price", 0)
+    return 0
+
+
 def create_shop_item(
     item_id: str,
-    price: int,
+    price: Optional[int] = None,
     stock: int = -1,
     name: Optional[str] = None,
     description: Optional[str] = None
@@ -132,12 +152,12 @@ def create_shop_item(
     """
     Crea un ShopItem vinculado a la factoría central de items.
     
-    El nombre y la descripción se generan automáticamente desde config.py
-    a menos que se proporcionen manualmente.
+    El nombre, la descripción y el precio se resuelven automáticamente
+    desde config.py a menos que se proporcionen manualmente.
     
     Args:
         item_id: ID del item en la factoría (ej: "health_potion", "dagger")
-        price: Precio en monedas de oro
+        price: Precio override (None = automático desde config)
         stock: Cantidad disponible (-1 = ilimitado, >0 = limitado)
         name: Nombre override (None = automático desde config)
         description: Descripción override (None = automática desde config)
@@ -146,17 +166,18 @@ def create_shop_item(
         ShopItem listo para añadir a una tienda
         
     Ejemplo:
-        shop.add_item(create_shop_item("dagger", price=50, stock=1))
-        shop.add_item(create_shop_item("health_potion", price=10))
+        shop.add_item(create_shop_item("dagger", stock=1))
+        shop.add_item(create_shop_item("health_potion"))
     """
     resolved_name = name if name is not None else _auto_name(item_id)
     resolved_desc = description if description is not None else _auto_description(item_id)
+    resolved_price = price if price is not None else get_item_price(item_id)
     
     return ShopItem(
         item_id=item_id,
         name=resolved_name,
         description=resolved_desc,
-        price=price,
+        price=resolved_price,
         stock=stock,
     )
 
@@ -314,8 +335,10 @@ class Shop:
 #   1. DONACIÓN ACUMULADA (persistente): "merchant_donated_total"
 #      El jugador dona oro libremente al Comerciante Errante en el lobby.
 #      El total donado determina qué items están desbloqueados.
-#      Cada item se desbloquea al superar un umbral acumulado
-#      (= suma de precios de todos los items hasta ese punto × UNLOCK_COST_MULTIPLIER).
+#      Cada tier cuesta exactamente el precio del item que desbloquea.
+#      El umbral de desbloqueo del item N es la suma acumulada de los
+#      precios de los items 0..N.
+#      Si el jugador dona suficiente de golpe, desbloquea varios tiers.
 #
 #   2. RESTOCK (por run): "merchant_restock_paid"
 #      Sin restock pagado la tienda está vacía (0 items).
@@ -328,26 +351,23 @@ class Shop:
 #   "merchant_restock_paid"  → bool, si el jugador pagó restock esta run
 # ══════════════════════════════════════════════════════════════════
 
-# Multiplicador de coste de desbloqueo: precio_item × este valor = coste
-UNLOCK_COST_MULTIPLIER: int = 1
-
 # Pool secuencial de items del comerciante.
-# Orden = orden de desbloqueo. Cada tupla: (item_id, precio_en_tienda).
-# El umbral acumulado para desbloquear el item N es:
-#   sum(precio[0..N]) × UNLOCK_COST_MULTIPLIER
-MERCHANT_ITEM_POOL: list[tuple[str, int]] = [
-    ("health_potion",        10),
-    ("bronze_dagger",         3),
-    ("leather_armor",         3),
-    ("short_sword",           6),
-    ("chain_mail",            6),
-    ("greater_health_potion", 15),
-    ("long_sword",           10),
-    ("plate_armor",          10),
-    ("strength_potion",      15),
-    ("war_axe",              15),
-    ("commander_sword",      20),
-    ("dragon_armor",         20),
+# Orden = orden de desbloqueo (solo item_ids).
+# El coste de cada tier = precio del item (definido en config.py).
+# El umbral acumulado para desbloquear el item N es: sum(precio[0..N]).
+MERCHANT_ITEM_POOL: list[str] = [
+    "health_potion",
+    "bronze_dagger",
+    "leather_armor",
+    "short_sword",
+    "chain_mail",
+    "greater_health_potion",
+    "long_sword",
+    "plate_armor",
+    "strength_potion",
+    "war_axe",
+    "commander_sword",
+    "dragon_armor",
 ]
 
 
@@ -355,14 +375,17 @@ def get_unlock_thresholds() -> list[int]:
     """
     Calcula los umbrales acumulados de desbloqueo para cada item.
     
+    Cada tier cuesta el precio del item (leído de config.py).
+    El umbral del item N = suma de precios[0..N].
+    
     Returns:
         Lista de umbrales acumulados (uno por item en MERCHANT_ITEM_POOL).
         El item i se desbloquea cuando donated_total >= thresholds[i].
     """
     thresholds = []
     cumulative = 0
-    for _, price in MERCHANT_ITEM_POOL:
-        cumulative += price * UNLOCK_COST_MULTIPLIER
+    for item_id in MERCHANT_ITEM_POOL:
+        cumulative += get_item_price(item_id)
         thresholds.append(cumulative)
     return thresholds
 
@@ -370,6 +393,9 @@ def get_unlock_thresholds() -> list[int]:
 def get_unlocked_count(donated_total: int) -> int:
     """
     Calcula cuántos items están desbloqueados dado un total donado.
+    
+    Cada tier cuesta el precio del item. Si se dona suficiente para
+    cubrir varios tiers de golpe, todos se desbloquean.
     
     Args:
         donated_total: Total de oro donado acumulado
@@ -379,8 +405,8 @@ def get_unlocked_count(donated_total: int) -> int:
     """
     count = 0
     cumulative = 0
-    for _, price in MERCHANT_ITEM_POOL:
-        cumulative += price * UNLOCK_COST_MULTIPLIER
+    for item_id in MERCHANT_ITEM_POOL:
+        cumulative += get_item_price(item_id)
         if donated_total >= cumulative:
             count += 1
         else:
@@ -402,10 +428,11 @@ def _get_unlocked_merchant_items(donated_total: int) -> List[ShopItem]:
     """
     items: List[ShopItem] = []
     cumulative = 0
-    for item_id, price in MERCHANT_ITEM_POOL:
-        cumulative += price * UNLOCK_COST_MULTIPLIER
+    for item_id in MERCHANT_ITEM_POOL:
+        price = get_item_price(item_id)
+        cumulative += price
         if donated_total >= cumulative:
-            items.append(create_shop_item(item_id, price=price, stock=1))
+            items.append(create_shop_item(item_id, stock=1))
         else:
             break
     return items

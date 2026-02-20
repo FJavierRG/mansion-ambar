@@ -782,7 +782,7 @@ class DevCommandManager:
         from ..systems.events import event_manager
         from ..systems.shop import (
             refresh_merchant_shop, get_unlocked_count,
-            get_unlock_thresholds, MERCHANT_ITEM_POOL,
+            get_unlock_thresholds, get_item_price, MERCHANT_ITEM_POOL,
         )
         
         current_total = event_manager.get_data("merchant_donated_total", 0)
@@ -800,8 +800,9 @@ class DevCommandManager:
                 f"Restock pagado: {'Sí' if restock_paid else 'No'}",
                 f"",
             ]
-            for i, (item_id, price) in enumerate(MERCHANT_ITEM_POOL):
+            for i, item_id in enumerate(MERCHANT_ITEM_POOL):
                 status = "✓" if i < unlocked else "✗"
+                price = get_item_price(item_id)
                 threshold = thresholds[i]
                 messages.append(f"  {status} {item_id} (precio: {price}) — umbral: {threshold}")
             

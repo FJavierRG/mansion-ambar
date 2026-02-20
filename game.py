@@ -1091,17 +1091,30 @@ class Game:
             if self.donation_amount > 0:
                 # Ejecutar la donación
                 from .systems.events import event_manager
-                from .systems.shop import refresh_merchant_shop
+                from .systems.shop import refresh_merchant_shop, get_unlocked_count
+                
+                current_total = event_manager.get_data("merchant_donated_total", 0)
+                old_unlocked = get_unlocked_count(current_total)
                 
                 self.player.gold -= self.donation_amount
-                current_total = event_manager.get_data("merchant_donated_total", 0)
-                event_manager.set_data("merchant_donated_total", current_total + self.donation_amount)
+                new_total = current_total + self.donation_amount
+                event_manager.set_data("merchant_donated_total", new_total)
                 refresh_merchant_shop()
+                
+                new_unlocked = get_unlocked_count(new_total)
                 
                 self.message_log.add(
                     f"Has donado {self.donation_amount} oro al mercader.",
                     "message_important"
                 )
+                
+                # Si se desbloqueó al menos un tier, el wanderer reacciona
+                if new_unlocked > old_unlocked:
+                    self.message_log.add(
+                        "Comerciante Errante: \"Oh, genial! Ya se en qué voy a usar esto.\"",
+                        "message_important"
+                    )
+                
                 music_manager.play_sound("UI-select.mp3", volume=0.4)
             
             self.state = GameState.PLAYING
