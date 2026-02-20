@@ -459,10 +459,7 @@ def _on_loot_cadaver_envenenado(player, zone):
         player.add_to_inventory(carta)
     
     # Entregar: 50 monedas de oro
-    for _ in range(50):
-        gold = create_item("gold", x=player.x, y=player.y)
-        if gold:
-            player.add_to_inventory(gold)
+    player.gold += 50
     
     # Entregar: Poción de Vida Mayor
     potion = create_item("greater_health_potion", x=player.x, y=player.y)
@@ -780,18 +777,36 @@ def register_npc_states(manager) -> None:
     # Estado "cadaver_juntos" - Dungeon, cadáver del Stranger junto al de la nieta (ruta sin veneno)
     # Se llega por transición desde 'contratado_mercenario' tras 4 runs sin veneno.
     # El mercenario les alcanzó. El loot está en el cadáver de la nieta, no en este.
+    # spawn_near_npc="nieta" asegura que spawnee adyacente al cadáver de la nieta.
     manager.register_npc_state("Stranger", NPCStateConfig(
         state_id="cadaver_juntos",
         zone_type="dungeon",
-        floor=2,  # Aparece en el piso 2 (mismo que el cadáver de la nieta)
-        position=None,  # Posición aleatoria
+        floor=2,
+        position=None,
         char="%",
         color="dark_red",
         sprite_override="stranger_dead",
+        spawn_near_npc="nieta",
         dialog_tree_func=create_stranger_cadaver_juntos_dialog,
         completed_dialog_func=create_stranger_cadaver_juntos_completed,
         completion_condition=lambda p, z: True,
         spawn_condition=lambda floor, evt_mgr: not evt_mgr.is_event_triggered("nieta_veneno_entregado") and evt_mgr.is_event_triggered("nieta_descubierta"),
+        transitions=[
+            StateTransition(
+                target_state="cadaver_juntos_done",
+                condition=lambda p, z: (
+                    event_manager.get_data("cadaver_juntos_looted_at_run", -1) >= 0
+                    and event_manager.run_count > event_manager.get_data("cadaver_juntos_looted_at_run", -1)
+                ),
+                description="Quest completada: llave recogida en run anterior"
+            )
+        ]
+    ))
+    
+    # Estado "cadaver_juntos_done" - Quest completada, Stranger ya no aparece
+    manager.register_npc_state("Stranger", NPCStateConfig(
+        state_id="cadaver_juntos_done",
+        zone_type=None,  # No aparece en ninguna zona
     ))
     
     # Estado "desaparecido" - Stranger desaparece tras la huida de la nieta

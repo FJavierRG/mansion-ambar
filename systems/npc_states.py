@@ -68,7 +68,9 @@ class NPCStateConfig:
     transitions: List[StateTransition] = field(default_factory=list)
     completion_condition: Optional[Callable[[Player, Zone], bool]] = None
     spawn_condition: Optional[Callable[[int, Any], bool]] = None  # (floor, event_manager) -> bool
+    blocks: bool = False  # Si la entidad NPC bloquea el movimiento (False para cadáveres, etc.)
     sprite_override: Optional[str] = None  # Clave de sprite alternativa (ej: "stranger_dead")
+    spawn_near_npc: Optional[str] = None  # Nombre de otro NPC junto al que spawnear (ej: cadáveres pareados)
 
 
 class NPCStateManager:
@@ -312,14 +314,14 @@ class NPCStateManager:
             print(f"[WARNING] Estado '{state_id}' no existe para NPC '{npc_name}'")
             return None
         
-        # Crear la entidad — NPCs nunca bloquean (blocks=False)
+        # Crear la entidad con el flag blocks del estado
         npc = Entity(
             x=x,
             y=y,
             char=state_config.char,
             name=npc_name,
             color=state_config.color,
-            blocks=False,
+            blocks=state_config.blocks,
             dungeon=zone
         )
         
@@ -436,6 +438,33 @@ class NPCStateManager:
         
         return random.choice(walkable_positions)
     
+    def _get_adjacent_position(self, zone: Zone, x: int, y: int) -> Optional[Tuple[int, int]]:
+        """
+        Busca una posición adyacente válida para spawn pareado.
+        
+        Intenta las 4 direcciones cardinales primero, luego diagonales.
+        La posición debe ser caminable, sin entidades bloqueantes y no
+        estar sobre o adyacente a escaleras.
+        
+        Args:
+            zone: Zona donde buscar
+            x: Coordenada X del NPC compañero
+            y: Coordenada Y del NPC compañero
+            
+        Returns:
+            Tupla (x, y) adyacente válida, o None si no hay espacio
+        """
+        # Cardinales primero (más natural), luego diagonales
+        for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1),
+                       (1, 1), (-1, 1), (1, -1), (-1, -1)]:
+            nx, ny = x + dx, y + dy
+            if (0 <= nx < zone.width and 0 <= ny < zone.height
+                    and zone.is_walkable(nx, ny)
+                    and not zone.get_blocking_entity_at(nx, ny)
+                    and not self._is_near_stairs(zone, nx, ny)):
+                return (nx, ny)
+        return None
+    
     def spawn_npcs_for_zone(
         self,
         zone: Zone
@@ -451,8 +480,8 @@ class NPCStateManager:
         2. Determinar qué estado mostrar (_get_spawn_state)
         3. Determinar posición y crear la entidad
         
-        La lógica de transiciones NO se evalúa aquí — solo al interactuar.
-        La completion_condition NO se evalúa aquí — solo para elegir diálogo.
+        Soporta spawn pareado: si un estado tiene `spawn_near_npc`, se intenta
+        colocar al NPC adyacente al compañero indicado (ej: cadáveres juntos).
         
         Args:
             zone: Zona donde spawnear (Lobby o Dungeon)
@@ -480,12 +509,25 @@ class NPCStateManager:
                 continue
             
             # 3. Determinar posición
+            pos = None
             if state_config.position:
                 pos = state_config.position
+            elif state_config.spawn_near_npc:
+                # Spawn pareado: buscar al NPC compañero en la zona
+                companion = next(
+                    (e for e in zone.entities if e.name == state_config.spawn_near_npc),
+                    None
+                )
+                if companion:
+                    pos = self._get_adjacent_position(zone, companion.x, companion.y)
+                # Si no hay compañero o no hay espacio adyacente, posición aleatoria
+                if not pos:
+                    pos = self._get_random_spawn_position(zone, state_config)
             else:
                 pos = self._get_random_spawn_position(zone, state_config)
-                if not pos:
-                    continue
+            
+            if not pos:
+                continue
             
             # 4. Verificar que no haya nada bloqueando ni escaleras adyacentes
             needs_reposition = (
@@ -560,16 +602,41 @@ class NPCStateManager:
             if current_config:
                 completion = self.get_state_completion(normalized_name, current_state)
                 
+                # Auto-completar estados IN_PROGRESS si:
+                # 1. Su completion_condition ya se cumple (sin interacción)
+                # 2. Al menos una transición tiene condición válida
+                # Esto permite que transiciones temporales (por run_count) no
+                # requieran que el jugador hable con el NPC para activarse.
+                if (completion == StateCompletion.IN_PROGRESS
+                        and current_config.transitions
+                        and current_config.completion_condition):
+                    try:
+                        if current_config.completion_condition(None, None):  # type: ignore
+                            for transition in current_config.transitions:
+                                try:
+                                    if transition.condition(None, None):  # type: ignore
+                                        # Hay transición viable → auto-completar
+                                        self.set_state_completion(
+                                            normalized_name, current_state,
+                                            StateCompletion.COMPLETED)
+                                        completion = StateCompletion.COMPLETED
+                                        break
+                                except (TypeError, AttributeError):
+                                    pass
+                    except (TypeError, AttributeError):
+                        pass
+                
                 # Si el estado está COMPLETED, intentar avanzar via transiciones
-                # Esto maneja transiciones diferidas (misma zona) y cross-zona
+                # Esto maneja transiciones diferidas (misma zona), cross-zona y a zone_type=None
                 if completion == StateCompletion.COMPLETED and current_config.transitions:
                     for transition in current_config.transitions:
                         target_config = self.get_state_config(normalized_name, transition.target_state)
-                        if not target_config or target_config.zone_type != zone_type:
+                        if not target_config:
                             continue
                         
-                        # Para dungeon, verificar piso del estado destino
-                        if zone_type == "dungeon":
+                        # Para transiciones a la MISMA zona tipo dungeon, verificar piso
+                        target_in_current_zone = (target_config.zone_type == zone_type)
+                        if target_in_current_zone and zone_type == "dungeon":
                             if not self._floor_matches_for_spawn(target_config, floor, event_manager):
                                 continue
                         
@@ -579,7 +646,12 @@ class NPCStateManager:
                                 # Transición diferida: ejecutar ahora
                                 self.set_current_state(normalized_name, transition.target_state)
                                 self.set_state_completion(normalized_name, transition.target_state, StateCompletion.IN_PROGRESS)
-                                return transition.target_state
+                                if target_in_current_zone:
+                                    # Destino en la misma zona → spawnear aquí
+                                    return transition.target_state
+                                else:
+                                    # Destino en otra zona o None → no spawnear aquí
+                                    return None
                         except (TypeError, AttributeError):
                             pass
                 

@@ -191,6 +191,8 @@ class Game:
                     self._handle_input(event.key)
                 elif event.type == pygame.TEXTINPUT and self.state == GameState.CONSOLE:
                     self.console_input += event.text
+                elif event.type == pygame.MOUSEWHEEL:
+                    self._handle_mousewheel(event.y)
         else:
             # Durante animaciones, solo procesar quit
             for event in pygame.event.get():
@@ -252,6 +254,18 @@ class Game:
         elif self.state == GameState.OPTIONS:
             self._handle_options_input(key)
     
+    def _handle_mousewheel(self, y: int) -> None:
+        """
+        Maneja el scroll de la rueda del ratón para el log de mensajes.
+        
+        Args:
+            y: Dirección del scroll (positivo = arriba, negativo = abajo)
+        """
+        if y > 0:
+            self.message_log.scroll_up(2)
+        elif y < 0:
+            self.message_log.scroll_down(2)
+    
     def _handle_playing_input(self, key: int) -> None:
         """Maneja la entrada durante el juego."""
         player_acted = False
@@ -289,6 +303,12 @@ class Game:
         # Pausa
         elif key == pygame.K_ESCAPE:
             self.state = GameState.PAUSED
+        
+        # Scroll del log de mensajes con PageUp/PageDown
+        if key == pygame.K_PAGEUP:
+            self.message_log.scroll_up(3)
+        elif key == pygame.K_PAGEDOWN:
+            self.message_log.scroll_down(3)
         
         # Si el jugador actuó, ejecutar turno de enemigos
         if player_acted:

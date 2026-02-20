@@ -90,10 +90,12 @@ class SpriteManager:
         # Ruta base a los sprites
         self._base_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
+            "resources",
             "sprites"
         )
         self._creatures_path = os.path.join(self._base_path, "criaturas")
         self._items_path = os.path.join(self._base_path, "objetos")
+        self._decoration_path = os.path.join(self._base_path, "decoracion")
     
     def load_sprites(self) -> None:
         """Carga todos los sprites en memoria (sin feedback de progreso)."""
@@ -132,18 +134,25 @@ class SpriteManager:
         total = len(all_assets)
         
         for i, (category, key, filename, scale) in enumerate(all_assets):
-            folder = self._creatures_path if category in ("creature", "terrain", "decoration") else self._items_path
-            sprite = self._load_sprite(folder, filename, scale=scale)
-            
-            if sprite:
-                if category == "creature":
-                    self._creature_cache[key] = sprite
-                elif category == "item":
+            # Determinar la carpeta según la categoría
+            if category == "item":
+                folder = self._items_path
+                sprite = self._load_sprite(folder, filename, scale=scale)
+                if sprite:
                     self._item_cache[key] = sprite
-                elif category == "decoration":
-                    self._decoration_cache[key] = sprite
-                else:
-                    self._terrain_cache[key] = sprite
+            elif category in ("decoration", "terrain"):
+                folder = self._decoration_path
+                sprite = self._load_sprite(folder, filename, scale=scale)
+                if sprite:
+                    if category == "decoration":
+                        self._decoration_cache[key] = sprite
+                    else:
+                        self._terrain_cache[key] = sprite
+            else:  # creature
+                # Buscar en subcarpetas de criaturas (enemigos o npcs)
+                sprite = self._load_creature_sprite(key, filename, scale=scale)
+                if sprite:
+                    self._creature_cache[key] = sprite
             
             yield (i + 1, total, key)
         
@@ -152,6 +161,31 @@ class SpriteManager:
         print(f"[SpriteManager] Cargados {len(self._item_cache)} sprites de items")
         print(f"[SpriteManager] Cargados {len(self._terrain_cache)} sprites de terreno")
         print(f"[SpriteManager] Cargados {len(self._decoration_cache)} sprites de decoración")
+    
+    def _load_creature_sprite(self, creature_type: str, filename: str, scale: bool = True) -> Optional[pygame.Surface]:
+        """
+        Carga un sprite de criatura buscando en las subcarpetas enemigos y npcs.
+        
+        Args:
+            creature_type: Tipo de criatura
+            filename: Nombre del archivo
+            scale: Si True, escala al tamaño de tile. Si False, mantiene tamaño original.
+            
+        Returns:
+            Surface de pygame o None si no se pudo cargar
+        """
+        # Lista de NPCs conocidos (basado en la estructura de carpetas)
+        npc_types = {"player", "stranger", "stranger_dead", "nieta", "nieta_dead", 
+                     "alquimista", "comerciante", "comerciante errante"}
+        
+        # Determinar en qué subcarpeta buscar
+        if creature_type in npc_types:
+            subfolder = "npcs"
+        else:
+            subfolder = "enemigos"
+        
+        folder = os.path.join(self._creatures_path, subfolder)
+        return self._load_sprite(folder, filename, scale=scale)
     
     def _load_sprite(self, folder: str, filename: str, scale: bool = True) -> Optional[pygame.Surface]:
         """

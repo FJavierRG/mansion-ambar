@@ -142,6 +142,9 @@ def create_nieta_descubierta_dialog() -> DialogTree:
         npc_state_manager.set_current_state("Stranger", "contratado_mercenario")
         npc_state_manager.set_state_completion("Stranger", "indignado", StateCompletion.COMPLETED)
         npc_state_manager.set_state_completion("Stranger", "contratado_mercenario", StateCompletion.IN_PROGRESS)
+        
+        # Guardar en qué run se entró para calcular timeout de la ruta sin veneno
+        event_manager.set_data("contratado_mercenario_entered_at_run", event_manager.run_count)
     
     descubierta_node = DialogNode(
         node_id="descubierta",
@@ -191,6 +194,9 @@ def create_nieta_descubierta_completed():
         
         # Activar evento
         event_manager.trigger_event("nieta_veneno_entregado", player, zone, skip_conditions=True)
+        
+        # Guardar en qué run se dio el veneno (para calcular cuándo aparece el cadáver)
+        event_manager.set_data("stranger_desaparecido_at_run", event_manager.run_count)
         
         # Cambiar estado de nieta: descubierta → huida
         npc_state_manager.set_current_state("nieta", "huida")
@@ -298,6 +304,9 @@ def _on_loot_cadaver_nieta(player, zone):
     
     # Marcar como saqueado
     event_manager.triggered_events.add("nieta_cadaver_looted")
+    
+    # Guardar en qué run se saqueó para que ambos cadáveres desaparezcan en la siguiente
+    event_manager.set_data("cadaver_juntos_looted_at_run", event_manager.run_count)
     
     # Entregar: Llave con forma de corazón
     key = create_item("heart_key", x=player.x, y=player.y)
@@ -479,16 +488,35 @@ def register_npc_states(manager) -> None:
     # Estado "cadaver_juntos_nieta" - Dungeon, cadáver de la nieta (ruta sin veneno)
     # Se llega por transición desde 'descubierta' tras 4 runs sin veneno.
     # El mercenario les alcanzó. El jugador encuentra la Llave con forma de corazón.
+    # spawn_near_npc="Stranger" asegura que spawnee adyacente al cadáver del Stranger.
     manager.register_npc_state("nieta", NPCStateConfig(
         state_id="cadaver_juntos_nieta",
         zone_type="dungeon",
-        floor=2,  # Aparece en el piso 2 (mismo que el cadáver del Stranger)
-        position=None,  # Posición aleatoria
+        floor=2,
+        position=None,
         char="%",
         color="dark_red",
+        blocks=False,
         sprite_override="nieta_dead",
+        spawn_near_npc="Stranger",
         dialog_tree_func=create_nieta_cadaver_juntos_dialog,
         completed_dialog_func=create_nieta_cadaver_juntos_completed,
         completion_condition=lambda p, z: event_manager.is_event_triggered("nieta_cadaver_looted"),
         spawn_condition=lambda floor, evt_mgr: not evt_mgr.is_event_triggered("nieta_veneno_entregado") and evt_mgr.is_event_triggered("nieta_descubierta"),
+        transitions=[
+            StateTransition(
+                target_state="cadaver_juntos_nieta_done",
+                condition=lambda p, z: (
+                    event_manager.get_data("cadaver_juntos_looted_at_run", -1) >= 0
+                    and event_manager.run_count > event_manager.get_data("cadaver_juntos_looted_at_run", -1)
+                ),
+                description="Quest completada: llave recogida en run anterior"
+            )
+        ]
+    ))
+    
+    # Estado "cadaver_juntos_nieta_done" - Quest completada, nieta ya no aparece
+    manager.register_npc_state("nieta", NPCStateConfig(
+        state_id="cadaver_juntos_nieta_done",
+        zone_type=None,  # No aparece en ninguna zona
     ))

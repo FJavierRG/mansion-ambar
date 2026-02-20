@@ -295,7 +295,7 @@ class Renderer:
             )
     
     def _render_message_log(self, message_log: MessageLog) -> None:
-        """Renderiza el log de mensajes."""
+        """Renderiza el log de mensajes con soporte de scroll."""
         x, y, width, height = self.log_area
         
         # Fondo
@@ -313,7 +313,7 @@ class Renderer:
             1
         )
         
-        # Mensajes
+        # Mensajes (get_recent ya tiene en cuenta el scroll_offset)
         messages = message_log.get_recent(MESSAGE_LOG_HEIGHT)
         padding = 5
         line_height = FONT_SIZE + 2
@@ -325,6 +325,15 @@ class Renderer:
                 text_surface,
                 (x + padding, y + padding + i * line_height)
             )
+        
+        # Indicador de scroll (esquina derecha del log)
+        indicator_x = x + width - 10
+        if message_log.can_scroll_up:
+            arrow_up = self.font.render("\u25b2", True, COLORS["gray"])
+            self.screen.blit(arrow_up, (indicator_x, y + 2))
+        if message_log.can_scroll_down:
+            arrow_down = self.font.render("\u25bc", True, COLORS["gray"])
+            self.screen.blit(arrow_down, (indicator_x, y + height - FONT_SIZE - 2))
     
     def _render_inventory(
         self, 

@@ -24,7 +24,8 @@ class MusicManager:
         # Ruta a la carpeta de música
         self._music_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
-            "sprites",
+            "resources",
+            "music",
             "music"
         )
         
