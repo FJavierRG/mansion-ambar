@@ -263,6 +263,58 @@ def create_nieta_obligada_completed() -> InteractiveText:
 
 
 # ============================================================================
+# ESTADO: "cadaver_juntos_nieta" (Dungeon - Cadáver de la Nieta, ruta sin veneno)
+# ============================================================================
+
+def create_nieta_cadaver_juntos_dialog() -> DialogTree:
+    """
+    Crea el diálogo al encontrar el cadáver de la nieta junto al del Stranger.
+    
+    Ruta: Ayudar a la nieta → NO dar veneno → El mercenario los alcanza.
+    Entre los ropajes de la niña el jugador encuentra la llave con forma de corazón.
+    
+    Returns:
+        DialogTree con el diálogo del cadáver
+    """
+    tree = DialogTree(start_node="discover")
+    
+    discover_node = DialogNode(
+        node_id="discover",
+        speaker="",
+        text="El cuerpo sin vida de la niña yace junto al del viejo.\nSea lo que fuese lo que pasó aquí, parece que ninguno de los dos salió con vida.\n---Entre sus ropajes brilla algo con una forma peculiar.",
+        options=[
+            DialogOption("Recoger el objeto", next_node=None, action=lambda p, z: _on_loot_cadaver_nieta(p, z))
+        ]
+    )
+    tree.add_node(discover_node)
+    
+    return tree
+
+
+def _on_loot_cadaver_nieta(player, zone):
+    """Acción al saquear el cadáver de la nieta. Entrega la Llave con forma de corazón."""
+    from roguelike.systems.events import event_manager
+    from roguelike.items.item import create_item
+    
+    # Marcar como saqueado
+    event_manager.triggered_events.add("nieta_cadaver_looted")
+    
+    # Entregar: Llave con forma de corazón
+    key = create_item("heart_key", x=player.x, y=player.y)
+    if key:
+        player.add_to_inventory(key)
+
+
+def create_nieta_cadaver_juntos_completed() -> InteractiveText:
+    """Diálogo corto cuando el cadáver de la nieta ya fue saqueado."""
+    return InteractiveText.create_simple_text(
+        "Los restos de la niña. Ya no queda nada entre sus pertenencias.",
+        title="",
+        auto_close=False
+    )
+
+
+# ============================================================================
 # REGISTRO DE ESTADOS DEL NPC
 # ============================================================================
 
@@ -376,6 +428,21 @@ def register_npc_states(manager) -> None:
         """Verifica si la nieta debe pasar a 'huida' (jugador le dio el veneno)."""
         return event_manager.is_event_triggered("nieta_veneno_entregado")
     
+    def check_cadaver_juntos_nieta_transition(player, zone):
+        """
+        Verifica si la nieta muere junto al Stranger (ruta sin veneno).
+        
+        Requiere:
+        - La nieta NO recibió el veneno
+        - Han pasado 4+ runs desde que Stranger entró en contratado_mercenario
+        """
+        if event_manager.is_event_triggered("nieta_veneno_entregado"):
+            return False
+        entered_at = event_manager.get_data("contratado_mercenario_entered_at_run", -1)
+        if entered_at < 0:
+            return False
+        return event_manager.run_count >= entered_at + 4
+    
     manager.register_npc_state("nieta", NPCStateConfig(
         state_id="descubierta",
         zone_type="dungeon",
@@ -386,10 +453,16 @@ def register_npc_states(manager) -> None:
         completion_condition=lambda p, z: event_manager.is_event_triggered("nieta_descubierta"),
         spawn_condition=nieta_descubierta_spawn_condition,
         transitions=[
+            # Orden importante: primero la ruta del veneno, luego la timeout
             StateTransition(
                 target_state="huida",
                 condition=check_huida_transition,
                 description="Cuando el jugador da el veneno a la nieta"
+            ),
+            StateTransition(
+                target_state="cadaver_juntos_nieta",
+                condition=check_cadaver_juntos_nieta_transition,
+                description="Ambos mueren tras 4 runs sin que el jugador dé el veneno"
             )
         ]
     ))
@@ -401,4 +474,21 @@ def register_npc_states(manager) -> None:
     manager.register_npc_state("nieta", NPCStateConfig(
         state_id="huida",
         zone_type=None,  # No aparece en ninguna zona
+    ))
+    
+    # Estado "cadaver_juntos_nieta" - Dungeon, cadáver de la nieta (ruta sin veneno)
+    # Se llega por transición desde 'descubierta' tras 4 runs sin veneno.
+    # El mercenario les alcanzó. El jugador encuentra la Llave con forma de corazón.
+    manager.register_npc_state("nieta", NPCStateConfig(
+        state_id="cadaver_juntos_nieta",
+        zone_type="dungeon",
+        floor=2,  # Aparece en el piso 2 (mismo que el cadáver del Stranger)
+        position=None,  # Posición aleatoria
+        char="%",
+        color="dark_red",
+        sprite_override="nieta_dead",
+        dialog_tree_func=create_nieta_cadaver_juntos_dialog,
+        completed_dialog_func=create_nieta_cadaver_juntos_completed,
+        completion_condition=lambda p, z: event_manager.is_event_triggered("nieta_cadaver_looted"),
+        spawn_condition=lambda floor, evt_mgr: not evt_mgr.is_event_triggered("nieta_veneno_entregado") and evt_mgr.is_event_triggered("nieta_descubierta"),
     ))

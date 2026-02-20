@@ -36,7 +36,9 @@ class SpriteManager:
         "dragon": "dragon.png",
         "ancient_dragon": "dragon anciano.png",
         "stranger": "stranger.png",  # NPC especial
+        "stranger_dead": "stranger_dead.png",  # Cadáver del Stranger
         "nieta": "nieta.png",  # Nieta del Stranger
+        "nieta_dead": "nieta_dead.png",  # Cadáver de la Nieta
         "alquimista": "alchemist.png",  # Alquimista
         "comerciante": "merchant.png",  # Comerciante (32x32, no escalar)
         "comerciante errante": "merchant_wanderer.png",  # Comerciante Errante (lobby)

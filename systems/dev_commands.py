@@ -170,6 +170,14 @@ class DevCommandManager:
             self._cmd_shop_restock
         )
         
+        # Comando: runs [cantidad]
+        self.register_command(
+            "runs",
+            "Muestra o establece el contador de runs completadas",
+            "runs [número]",
+            self._cmd_runs
+        )
+        
         # Comando: scenario
         self.register_command(
             "scenario",
@@ -846,6 +854,29 @@ class DevCommandManager:
             f"Items desbloqueados: {unlocked} (donado: {donated_total})",
         ]
     
+    def _cmd_runs(self, game: 'Game', args: List[str]) -> List[str]:
+        """Comando: runs [cantidad]"""
+        from ..systems.events import event_manager
+        
+        if not args:
+            return [
+                f"[DEV] Run actual: {event_manager.run_count}",
+                "Uso: runs <número> para establecer el contador.",
+                "Uso: runs +<N> para sumar N runs.",
+            ]
+        
+        value = args[0]
+        try:
+            if value.startswith("+"):
+                increment = int(value)
+                event_manager.run_count += increment
+                return [f"[DEV] Sumadas {increment} runs. Run actual: {event_manager.run_count}"]
+            else:
+                event_manager.run_count = int(value)
+                return [f"[DEV] Run establecida a {event_manager.run_count}"]
+        except ValueError:
+            return [f"Valor inválido: '{value}'. Usa un número entero (ej: 10, +3)."]
+    
     # ============================================================================
     # SISTEMA DE ESCENARIOS DE TEST
     # ============================================================================
@@ -1015,6 +1046,78 @@ class DevCommandManager:
                 ("Stranger", "desaparecido"),
                 ("nieta", "huida"),
             ],
+            "event_data": {
+                "stranger_desaparecido_at_run": "run+0",
+            },
+        },
+        # ── FINALES: cadáveres (ruta veneno) ─────────────────────
+        "stranger_cadaver_envenenado": {
+            "desc": "FINAL VENENO: cadáver envenenado del Stranger en piso 2",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_nieta_ayudar_started",
+                "nieta_ayudando",
+                "stranger_indignado",
+                "nieta_descubierta",
+                "nieta_veneno_entregado",
+            ],
+            "states": [
+                ("Stranger", "cadaver_envenenado"),
+                ("nieta", "huida"),
+            ],
+            "event_data": {
+                "stranger_desaparecido_at_run": "run-2",
+                "contratado_mercenario_entered_at_run": "run-5",
+            },
+        },
+        # ── FINALES: cadáveres (ruta sin veneno) ─────────────────
+        "cadaver_juntos": {
+            "desc": "FINAL SIN VENENO: ambos cadáveres en piso 2",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_nieta_ayudar_started",
+                "nieta_ayudando",
+                "stranger_indignado",
+                "nieta_descubierta",
+            ],
+            "states": [
+                ("Stranger", "cadaver_juntos"),
+                ("nieta", "cadaver_juntos_nieta"),
+            ],
+            "event_data": {
+                "contratado_mercenario_entered_at_run": "run-4",
+            },
+        },
+        # ── FINAL: ruta obligar → desaparecen ────────────────────
+        "nieta_obligada_desaparecen": {
+            "desc": "FINAL OBLIGAR: Stranger y nieta desaparecen tras 3 runs",
+            "events": [
+                "stranger_floor5_met",
+                "stranger_lobby_weapons_unlocked",
+                "stranger_lobby_potions_unlocked",
+                "stranger_help_accepted",
+                "granddaughter_spawn_enabled",
+                "granddaughter_found",
+                "mision_capturar_nieta_started",
+                "nieta_obligada",
+            ],
+            "states": [
+                ("Stranger", "stranger_y_nieta_desaparecen"),
+                ("nieta", "desaparecida"),
+            ],
+            "event_data": {
+                "mision_capturar_nieta_completed_at_run": "run-3",
+            },
         },
     }
     
@@ -1086,7 +1189,22 @@ class DevCommandManager:
         if items_given > 0:
             messages.append(f"  ✓ {items_given} items añadidos al inventario")
         
-        # 4. Eliminar NPCs actuales de la zona para forzar respawn limpio
+        # 4. Establecer event_data (claves persistentes arbitrarias)
+        data_set = 0
+        for key, value_spec in scenario.get("event_data", {}).items():
+            # Soportar valores relativos al run actual con prefijo "run-"
+            # Ej: "run-4" → event_manager.run_count - 4
+            if isinstance(value_spec, str) and value_spec.startswith("run"):
+                offset = int(value_spec.replace("run", ""))
+                actual_value = event_manager.run_count + offset
+            else:
+                actual_value = value_spec
+            event_manager.set_data(key, actual_value)
+            data_set += 1
+        if data_set > 0:
+            messages.append(f"  ✓ {data_set} datos persistentes establecidos")
+        
+        # 5. Eliminar NPCs actuales de la zona para forzar respawn limpio
         npc_names_affected = {name for name, _ in scenario.get("states", [])}
         zone = game.dungeon
         removed = 0

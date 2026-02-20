@@ -68,6 +68,7 @@ class NPCStateConfig:
     transitions: List[StateTransition] = field(default_factory=list)
     completion_condition: Optional[Callable[[Player, Zone], bool]] = None
     spawn_condition: Optional[Callable[[int, Any], bool]] = None  # (floor, event_manager) -> bool
+    sprite_override: Optional[str] = None  # Clave de sprite alternativa (ej: "stranger_dead")
 
 
 class NPCStateManager:
@@ -311,19 +312,22 @@ class NPCStateManager:
             print(f"[WARNING] Estado '{state_id}' no existe para NPC '{npc_name}'")
             return None
         
-        # Crear la entidad (usar char y color del estado si están definidos)
+        # Crear la entidad — NPCs nunca bloquean (blocks=False)
         npc = Entity(
             x=x,
             y=y,
             char=state_config.char,
             name=npc_name,
             color=state_config.color,
-            blocks=True,
+            blocks=False,
             dungeon=zone
         )
         
-        # Asignar sprite si existe
-        sprite = sprite_manager.get_creature_sprite(normalized_name.lower())
+        # Asignar sprite: primero sprite_override del estado, luego por nombre
+        if state_config.sprite_override:
+            sprite = sprite_manager.get_creature_sprite(state_config.sprite_override)
+        else:
+            sprite = sprite_manager.get_creature_sprite(normalized_name.lower())
         if sprite:
             npc.sprite = sprite
         
@@ -586,6 +590,26 @@ class NPCStateManager:
                         if not self._floor_matches_for_spawn(current_config, floor, event_manager):
                             return None
                     return current_state
+                elif current_config.zone_type is None:
+                    # Estado "invisible" (zone_type=None): verificar si alguna
+                    # transición lleva a un estado en la zona actual.
+                    # Esto permite que estados como "desaparecido" transicionen
+                    # a estados visibles (ej: cadáveres) sin importar completitud.
+                    for transition in current_config.transitions:
+                        target_config = self.get_state_config(normalized_name, transition.target_state)
+                        if not target_config or target_config.zone_type != zone_type:
+                            continue
+                        if zone_type == "dungeon":
+                            if not self._floor_matches_for_spawn(target_config, floor, event_manager):
+                                continue
+                        try:
+                            if transition.condition(None, None):  # type: ignore
+                                self.set_current_state(normalized_name, transition.target_state)
+                                self.set_state_completion(normalized_name, transition.target_state, StateCompletion.IN_PROGRESS)
+                                return transition.target_state
+                        except (TypeError, AttributeError):
+                            pass
+                    return None
                 else:
                     # Estado actual es para otra zona → no spawnear aquí
                     return None

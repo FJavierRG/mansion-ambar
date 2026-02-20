@@ -177,6 +177,8 @@ def get_all_item_ids() -> List[str]:
     ids.append("gold")
     ids.append("amulet")
     ids.append("heart_key")
+    ids.append("perfume_femenino")
+    ids.append("carta_agradecimiento_nieta")
     return ids
 
 
@@ -258,6 +260,32 @@ def create_item(item_id: str, x: int = 0, y: int = 0, **kwargs) -> Optional[Item
             char=SYMBOLS["key"],
             name="Llave con forma de corazón",
             color="amulet",
+            item_type="key_item",
+            identified=True,
+            usable=False,
+            persistent=True,
+        )
+    
+    # --- Perfume Femenino (item clave de misión, recompensa del arco Nieta) ---
+    if item_id == "perfume_femenino":
+        return Item(
+            x=x, y=y,
+            char="~",
+            name="Perfume femenino",
+            color="potion",
+            item_type="key_item",
+            identified=True,
+            usable=False,
+            persistent=True,
+        )
+    
+    # --- Carta de agradecimiento de la nieta (lore/quest item) ---
+    if item_id == "carta_agradecimiento_nieta":
+        return Item(
+            x=x, y=y,
+            char=SYMBOLS["scroll"],
+            name="Carta de la niña",
+            color="white",
             item_type="key_item",
             identified=True,
             usable=False,

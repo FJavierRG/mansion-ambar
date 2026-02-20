@@ -407,6 +407,121 @@ def create_stranger_contratado_mercenario_completed() -> InteractiveText:
 
 
 # ============================================================================
+# ESTADO: "cadaver_envenenado" (Dungeon - Cadáver del Stranger tras el veneno)
+# ============================================================================
+
+def create_stranger_cadaver_envenenado_dialog() -> DialogTree:
+    """
+    Crea el diálogo al encontrar el cadáver del Stranger envenenado por la nieta.
+    El jugador recibe la carta de agradecimiento y recompensas.
+    
+    Ruta: Ayudar a la nieta → Dar veneno → La nieta envenena al Stranger.
+    
+    Returns:
+        DialogTree con el diálogo del cadáver
+    """
+    tree = DialogTree(start_node="discover")
+    
+    discover_node = DialogNode(
+        node_id="discover",
+        speaker="",
+        text="Los restos del Extraño yacen en el suelo, su piel amoratada delata el veneno.\n---Entre sus ropas encuentras una nota doblada con esmero y algunos objetos.",
+        options=[
+            DialogOption("Leer la nota", next_node="carta")
+        ]
+    )
+    tree.add_node(discover_node)
+    
+    carta_node = DialogNode(
+        node_id="carta",
+        speaker="Carta de la niña",
+        text="«Siento haberte mentido. No soy lo que dije ser, pero tampoco lo era él.\n---Necesitaba deshacerme de él para recuperar algo que me pertenece.\nNo quería involucrarte más de lo necesario.\n---Gracias por el veneno. Me ha sido muy útil.\nEspero que lo que he dejado junto al viejo te sirva de algo.\n---Cuídate entre esos pasillos. Hay cosas peores que un viejo mentiroso.»",
+        options=[
+            DialogOption("Recoger los objetos", next_node=None, action=lambda p, z: _on_loot_cadaver_envenenado(p, z))
+        ]
+    )
+    tree.add_node(carta_node)
+    
+    return tree
+
+
+def _on_loot_cadaver_envenenado(player, zone):
+    """Acción al saquear el cadáver envenenado del Stranger. Entrega todas las recompensas."""
+    from roguelike.systems.events import event_manager
+    from roguelike.items.item import create_item
+    
+    # Marcar como saqueado
+    event_manager.triggered_events.add("stranger_cadaver_looted")
+    
+    # Entregar: Carta de la niña
+    carta = create_item("carta_agradecimiento_nieta", x=player.x, y=player.y)
+    if carta:
+        player.add_to_inventory(carta)
+    
+    # Entregar: 50 monedas de oro
+    for _ in range(50):
+        gold = create_item("gold", x=player.x, y=player.y)
+        if gold:
+            player.add_to_inventory(gold)
+    
+    # Entregar: Poción de Vida Mayor
+    potion = create_item("greater_health_potion", x=player.x, y=player.y)
+    if potion:
+        player.add_to_inventory(potion)
+    
+    # Entregar: Perfume femenino (item clave pendiente de desarrollo)
+    perfume = create_item("perfume_femenino", x=player.x, y=player.y)
+    if perfume:
+        player.add_to_inventory(perfume)
+
+
+def create_stranger_cadaver_envenenado_completed() -> InteractiveText:
+    """Diálogo corto cuando el cadáver ya fue saqueado."""
+    return InteractiveText.create_simple_text(
+        "Los restos del Extraño yacen inertes. Ya no queda nada de valor entre sus pertenencias.",
+        title="",
+        auto_close=False
+    )
+
+
+# ============================================================================
+# ESTADO: "cadaver_juntos" (Dungeon - Cadáver del Stranger, ruta sin veneno)
+# ============================================================================
+
+def create_stranger_cadaver_juntos_dialog() -> DialogTree:
+    """
+    Crea el diálogo al encontrar el cadáver del Stranger junto al de la nieta.
+    
+    Ruta: Ayudar a la nieta → NO dar veneno → El mercenario los alcanza a ambos.
+    
+    Returns:
+        DialogTree con el diálogo del cadáver
+    """
+    tree = DialogTree(start_node="discover")
+    
+    discover_node = DialogNode(
+        node_id="discover",
+        speaker="",
+        text="Los restos del Extraño yacen en el suelo junto a los de la niña.\nParece que al final se encontraron.\n---No queda nada de valor entre las pertenencias del viejo.",
+        options=[
+            DialogOption("Cerrar", next_node=None)
+        ]
+    )
+    tree.add_node(discover_node)
+    
+    return tree
+
+
+def create_stranger_cadaver_juntos_completed() -> InteractiveText:
+    """Diálogo corto para el cadáver del Stranger (ya visto)."""
+    return InteractiveText.create_simple_text(
+        "Los restos del Extraño. No queda nada de valor.",
+        title="",
+        auto_close=False
+    )
+
+
+# ============================================================================
 # REGISTRO DE ESTADOS DEL NPC
 # ============================================================================
 
@@ -624,6 +739,21 @@ def register_npc_states(manager) -> None:
         """Verifica si Stranger debe desaparecer (nieta recibió el veneno)."""
         return event_manager.is_event_triggered("nieta_veneno_entregado")
     
+    def check_cadaver_juntos_transition(player, zone):
+        """
+        Verifica si Stranger y nieta mueren juntos (ruta sin veneno).
+        
+        Requiere:
+        - La nieta NO recibió el veneno
+        - Han pasado 4+ runs desde que Stranger entró en contratado_mercenario
+        """
+        if event_manager.is_event_triggered("nieta_veneno_entregado"):
+            return False
+        entered_at = event_manager.get_data("contratado_mercenario_entered_at_run", -1)
+        if entered_at < 0:
+            return False
+        return event_manager.run_count >= entered_at + 4
+    
     manager.register_npc_state("Stranger", NPCStateConfig(
         state_id="contratado_mercenario",
         zone_type="lobby",
@@ -633,20 +763,79 @@ def register_npc_states(manager) -> None:
         completion_condition=lambda p, z: True,
         spawn_condition=lambda floor, evt_mgr: evt_mgr.is_event_triggered("nieta_descubierta"),
         transitions=[
+            # Orden importante: primero la ruta del veneno, luego la timeout
             StateTransition(
                 target_state="desaparecido",
                 condition=check_desaparecido_transition,
                 description="Cuando la nieta recibe el veneno y huye"
+            ),
+            StateTransition(
+                target_state="cadaver_juntos",
+                condition=check_cadaver_juntos_transition,
+                description="Ambos mueren tras 4 runs sin que el jugador dé el veneno"
             )
         ]
+    ))
+    
+    # Estado "cadaver_juntos" - Dungeon, cadáver del Stranger junto al de la nieta (ruta sin veneno)
+    # Se llega por transición desde 'contratado_mercenario' tras 4 runs sin veneno.
+    # El mercenario les alcanzó. El loot está en el cadáver de la nieta, no en este.
+    manager.register_npc_state("Stranger", NPCStateConfig(
+        state_id="cadaver_juntos",
+        zone_type="dungeon",
+        floor=2,  # Aparece en el piso 2 (mismo que el cadáver de la nieta)
+        position=None,  # Posición aleatoria
+        char="%",
+        color="dark_red",
+        sprite_override="stranger_dead",
+        dialog_tree_func=create_stranger_cadaver_juntos_dialog,
+        completed_dialog_func=create_stranger_cadaver_juntos_completed,
+        completion_condition=lambda p, z: True,
+        spawn_condition=lambda floor, evt_mgr: not evt_mgr.is_event_triggered("nieta_veneno_entregado") and evt_mgr.is_event_triggered("nieta_descubierta"),
     ))
     
     # Estado "desaparecido" - Stranger desaparece tras la huida de la nieta
     # zone_type=None hace que no spawnee en ninguna zona.
     # Se llega cuando la nieta recibe el veneno y huye.
+    # Ahora tiene transición a cadaver_envenenado (la nieta lo envenena).
+    def check_cadaver_envenenado_transition(player, zone):
+        """
+        Verifica si el cadáver envenenado del Stranger debe aparecer.
+        
+        Requiere que hayan pasado 2+ runs desde que la nieta recibió el veneno.
+        """
+        desaparecido_at = event_manager.get_data("stranger_desaparecido_at_run", -1)
+        if desaparecido_at < 0:
+            return False
+        return event_manager.run_count >= desaparecido_at + 2
+    
     manager.register_npc_state("Stranger", NPCStateConfig(
         state_id="desaparecido",
         zone_type=None,  # No aparece en ninguna zona
+        transitions=[
+            StateTransition(
+                target_state="cadaver_envenenado",
+                condition=check_cadaver_envenenado_transition,
+                description="Cadáver del Stranger aparece 2 runs después de darle el veneno a la nieta"
+            )
+        ]
+    ))
+    
+    # Estado "cadaver_envenenado" - Dungeon, cadáver del Stranger (ruta veneno)
+    # Se llega por transición desde 'desaparecido' tras 2 runs.
+    # El jugador encuentra el cadáver con recompensas.
+    manager.register_npc_state("Stranger", NPCStateConfig(
+        state_id="cadaver_envenenado",
+        zone_type="dungeon",
+        floor=2,  # Aparece en el piso 2
+        position=None,  # Posición aleatoria
+        char="%",
+        color="dark_red",
+        sprite_override="stranger_dead",
+        dialog_tree_func=create_stranger_cadaver_envenenado_dialog,
+        completed_dialog_func=create_stranger_cadaver_envenenado_completed,
+        completion_condition=lambda p, z: event_manager.is_event_triggered("stranger_cadaver_looted"),
+        spawn_condition=lambda floor, evt_mgr: evt_mgr.is_event_triggered("nieta_veneno_entregado"),
     ))
 
 

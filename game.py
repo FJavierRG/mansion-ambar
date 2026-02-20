@@ -1207,36 +1207,41 @@ class Game:
         new_x = self.player.x + dx
         new_y = self.player.y + dy
         
-        # Verificar si hay un enemigo
+        # Verificar si hay una entidad bloqueante (blocks=True)
         target = self.dungeon.get_blocking_entity_at(new_x, new_y)
         
-        if target and hasattr(target, 'fighter') and target.fighter is not None and not target.fighter.is_dead:
-            # Animación de ataque del jugador
-            self.animation_manager.add_attack_animation(
-                attacker_id=id(self.player),
-                attacker_x=self.player.x,
-                attacker_y=self.player.y,
-                target_x=target.x,
-                target_y=target.y
-            )
+        if target:
+            # Fighter: atacar si está vivo
+            if hasattr(target, 'fighter') and target.fighter is not None and not target.fighter.is_dead:
+                # Animación de ataque del jugador
+                self.animation_manager.add_attack_animation(
+                    attacker_id=id(self.player),
+                    attacker_x=self.player.x,
+                    attacker_y=self.player.y,
+                    target_x=target.x,
+                    target_y=target.y
+                )
+                
+                # Atacar (pasando animation_manager para números de daño)
+                messages = Combat.attack(self.player, target, self.animation_manager)
+                
+                # Colorear mensajes según contenido
+                for msg in messages:
+                    if "muere" in msg.lower():
+                        self.message_log.add(msg, "message_death")
+                    elif "experiencia" in msg.lower() or "nivel" in msg.lower():
+                        self.message_log.add(msg, "message_important")
+                    elif "golpea" in msg.lower() or "daño" in msg.lower():
+                        self.message_log.add(msg, "message_damage")
+                    else:
+                        self.message_log.add(msg)
+                
+                return True
             
-            # Atacar (pasando animation_manager para números de daño)
-            messages = Combat.attack(self.player, target, self.animation_manager)
-            
-            # Colorear mensajes según contenido
-            for msg in messages:
-                if "muere" in msg.lower():
-                    self.message_log.add(msg, "message_death")
-                elif "experiencia" in msg.lower() or "nivel" in msg.lower():
-                    self.message_log.add(msg, "message_important")
-                elif "golpea" in msg.lower() or "daño" in msg.lower():
-                    self.message_log.add(msg, "message_damage")
-                else:
-                    self.message_log.add(msg)
-            
-            return True
+            # Entidad bloqueante sin fighter: no se puede pasar ni atacar
+            return False
         
-        # Intentar moverse
+        # Intentar moverse (no hay entidad bloqueante)
         if self.dungeon.is_walkable(new_x, new_y):
             self.player.x = new_x
             self.player.y = new_y

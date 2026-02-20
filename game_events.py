@@ -124,7 +124,7 @@ def register_stranger_event() -> None:
             char="@",
             name="nieta",
             color="yellow",
-            blocks=True,
+            blocks=False,
             dungeon=zone
         )
         
@@ -235,6 +235,24 @@ def register_stranger_event() -> None:
         auto_trigger=False
     )
     
+    # Evento: Cadáver del Stranger saqueado (ruta veneno)
+    event_stranger_cadaver_looted = GameEvent(
+        event_id="stranger_cadaver_looted",
+        name="Cadáver del Stranger saqueado",
+        description="El jugador recogió las recompensas del cadáver envenenado del Stranger",
+        persistent=True,
+        auto_trigger=False
+    )
+    
+    # Evento: Cadáver de la nieta saqueado (ruta sin veneno)
+    event_nieta_cadaver_looted = GameEvent(
+        event_id="nieta_cadaver_looted",
+        name="Cadáver de la nieta saqueado",
+        description="El jugador recogió la Llave con forma de corazón del cadáver de la nieta",
+        persistent=True,
+        auto_trigger=False
+    )
+    
     # Registrar eventos
     event_manager.register_event(event_stranger_met)
     event_manager.register_event(event_stranger_lobby_weapons)
@@ -251,6 +269,8 @@ def register_stranger_event() -> None:
     event_manager.register_event(event_nieta_veneno)
     event_manager.register_event(event_nieta_huida)
     event_manager.register_event(event_stranger_desaparecido)
+    event_manager.register_event(event_stranger_cadaver_looted)
+    event_manager.register_event(event_nieta_cadaver_looted)
 
 
 def register_npc_floor5_event() -> None:
